@@ -4,11 +4,10 @@ version = "0.1.0"
 description = ""
 authors = ["Rajat Rasal <rajatrasal6399@gmail.com>"]
 readme = "README.md"
-packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
-python = "3.9.*"
-hi-ml-multimodal = "0.3.4"
+python = "3.10.13"
+# hi-ml-multimodal = "0.2.1"
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,0 +1,7 @@
+.pants.d
+.pids
+
+*.pyc
+
+*.swp
+*.swo

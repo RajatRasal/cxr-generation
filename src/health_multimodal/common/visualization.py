@@ -14,7 +14,6 @@ from PIL import Image
 
 from health_multimodal.image.data.io import load_image
 
-
 TypeArrayImage = Union[np.ndarray, Image.Image]
 
 
@@ -108,9 +107,12 @@ def _plot_heatmap(
 
 
 def plot_phrase_grounding_similarity_map(
-    image_path: Path, similarity_map: np.ndarray, bboxes: Optional[List[Tuple[float, float, float, float]]] = None
+    image_path: Path,
+    similarity_map: np.ndarray,
+    bboxes: Optional[List[Tuple[float, float, float, float]]] = None,
 ) -> plt.Figure:
-    """Plot visualization of the input image, the similarity heatmap and the heatmap isolines.
+    """Plot visualization of the input image, the similarity heatmap and the
+    heatmap isolines.
 
     :param image_path: Path to the input image.
     :param similarity_map: Phase grounding similarity map of the same size as the image.
@@ -120,17 +122,21 @@ def plot_phrase_grounding_similarity_map(
     image = load_image(image_path).convert("RGB")
     _plot_image(image, axis=axes[0], title="Input image")
     _plot_isolines(image, similarity_map, axis=axes[1], title="Similarity isolines")
-    _plot_heatmap(image, similarity_map, figure=fig, axis=axes[2], title="Similarity heatmap")
+    _plot_heatmap(
+        image, similarity_map, figure=fig, axis=axes[2], title="Similarity heatmap"
+    )
     if bboxes is not None:
         _plot_bounding_boxes(ax=axes[1], bboxes=bboxes)
     return fig
 
 
 def _plot_bounding_boxes(
-    ax: plt.Axes, bboxes: List[Tuple[float, float, float, float]], linewidth: float = 1.5, alpha: float = 0.45
+    ax: plt.Axes,
+    bboxes: List[Tuple[float, float, float, float]],
+    linewidth: float = 1.5,
+    alpha: float = 0.45,
 ) -> None:
-    """
-    Plot bounding boxes on an existing axes object.
+    """Plot bounding boxes on an existing axes object.
 
     :param ax: The axes object to plot the bounding boxes on.
     :param bboxes: A list of bounding box coordinates as (x, y, width, height) tuples.
@@ -140,6 +146,13 @@ def _plot_bounding_boxes(
     for bbox in bboxes:
         x, y, width, height = bbox
         rect = patches.Rectangle(
-            (x, y), width, height, linewidth=linewidth, edgecolor='k', facecolor='none', linestyle='--', alpha=alpha
+            (x, y),
+            width,
+            height,
+            linewidth=linewidth,
+            edgecolor="k",
+            facecolor="none",
+            linestyle="--",
+            alpha=alpha,
         )
         ax.add_patch(rect)

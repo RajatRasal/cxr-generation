@@ -9,8 +9,7 @@ from transformers import BertConfig, BertTokenizer
 
 
 class CXRBertConfig(BertConfig):
-    """
-    Config class for CXR-BERT model.
+    """Config class for CXR-BERT model.
 
     :param projection_size: Dimensionality of the joint latent space.
     """

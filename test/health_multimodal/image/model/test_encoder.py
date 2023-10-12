@@ -8,21 +8,19 @@ from typing import Sequence
 import pytest
 import torch
 from health_multimodal.image.model.encoder import (
-    DEFAULT_DILATION_VALUES_FOR_RESNET,
-    ImageEncoder,
-    MultiImageEncoder,
-    restore_training_mode,
-)
+    DEFAULT_DILATION_VALUES_FOR_RESNET, ImageEncoder, MultiImageEncoder,
+    restore_training_mode)
 from health_multimodal.image.model.pretrained import get_imagenet_init_encoder
 from health_multimodal.image.model.resnet import resnet50
 from health_multimodal.image.model.types import ImageEncoderType
 
 
 @pytest.mark.parametrize("replace_stride_with_dilation", [None, [False, False, True]])
-def test_reload_resnet_with_dilation(replace_stride_with_dilation: Sequence[bool]) -> None:
-    """
-    Tests if the resnet model can be switched from pooling to dilated convolutions.
-    """
+def test_reload_resnet_with_dilation(
+    replace_stride_with_dilation: Sequence[bool],
+) -> None:
+    """Tests if the resnet model can be switched from pooling to dilated
+    convolutions."""
 
     # resnet18 does not support dilation
     model_with_dilation = ImageEncoder(img_encoder_type=ImageEncoderType.RESNET18)
@@ -91,7 +89,9 @@ def test_multi_image_encoder_forward_pass() -> None:
     # Multi-image run
     with torch.no_grad():
         patch_emb, global_emb = encoder(
-            current_image=current_image, previous_image=previous_image, return_patch_embeddings=True
+            current_image=current_image,
+            previous_image=previous_image,
+            return_patch_embeddings=True,
         )
         # Model output dimension is fixed to 512 (see MultiImageEncoder.__init__())
         assert global_emb.shape == (batch_size, 512)
@@ -99,7 +99,11 @@ def test_multi_image_encoder_forward_pass() -> None:
 
     # Single-image run
     with torch.no_grad():
-        patch_emb, global_emb = encoder(current_image=current_image, previous_image=None, return_patch_embeddings=True)
+        patch_emb, global_emb = encoder(
+            current_image=current_image,
+            previous_image=None,
+            return_patch_embeddings=True,
+        )
         # Model output dimension is fixed to 512 (see MultiImageEncoder.__init__())
         assert global_emb.shape == (batch_size, 512)
         assert patch_emb.shape == (batch_size, 512, 14, 14)

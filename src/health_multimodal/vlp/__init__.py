@@ -3,7 +3,7 @@
 #  Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 #  -------------------------------------------------------------------------------------------
 
-"""Visual-language processing tools
+"""Visual-language processing tools.
 
 .. currentmodule:: health_multimodal.vlp
 

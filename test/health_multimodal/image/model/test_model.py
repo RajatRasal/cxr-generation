@@ -9,10 +9,10 @@ import pytest
 import torch
 from health_multimodal.image.model.model import ImageModel, MultiImageModel
 from health_multimodal.image.model.modules import MultiTaskModel
-from health_multimodal.image.model.pretrained import get_biovil_image_encoder
-from health_multimodal.image.model.pretrained import get_biovil_t_image_encoder
-from health_multimodal.image.model.types import ImageEncoderType
-from health_multimodal.image.model.types import ImageModelOutput
+from health_multimodal.image.model.pretrained import (
+    get_biovil_image_encoder, get_biovil_t_image_encoder)
+from health_multimodal.image.model.types import (ImageEncoderType,
+                                                 ImageModelOutput)
 
 
 def test_loading_biovilt_pretrained_model() -> None:
@@ -20,9 +20,7 @@ def test_loading_biovilt_pretrained_model() -> None:
 
 
 def test_frozen_cnn_model() -> None:
-    """
-    Checks if the mode of module parameters is set correctly.
-    """
+    """Checks if the mode of module parameters is set correctly."""
 
     model = ImageModel(
         img_encoder_type=ImageEncoderType.RESNET18,
@@ -51,7 +49,7 @@ def test_frozen_cnn_model() -> None:
     assert not model.classifier.training
 
     model = ImageModel(
-        img_encoder_type='resnet18',
+        img_encoder_type="resnet18",
         joint_feature_size=4,
         num_classes=2,
         freeze_encoder=False,
@@ -63,11 +61,13 @@ def test_frozen_cnn_model() -> None:
     assert model.classifier.training  # type: ignore
 
 
-@pytest.mark.parametrize("img_encoder_type", [ImageEncoderType.RESNET18, ImageEncoderType.RESNET18_MULTI_IMAGE])
+@pytest.mark.parametrize(
+    "img_encoder_type",
+    [ImageEncoderType.RESNET18, ImageEncoderType.RESNET18_MULTI_IMAGE],
+)
 def test_image_get_patchwise_projected_embeddings(img_encoder_type: str) -> None:
-    """
-    Checks if the image patch embeddings are correctly computed and projected to the latent space.
-    """
+    """Checks if the image patch embeddings are correctly computed and
+    projected to the latent space."""
 
     num_classes = 2
     num_tasks = 1
@@ -82,7 +82,9 @@ def test_image_get_patchwise_projected_embeddings(img_encoder_type: str) -> None
     )
     model.train()
     with pytest.raises(AssertionError) as ex:
-        model.get_patchwise_projected_embeddings(torch.rand(size=(2, 3, 448, 448)), normalize=True)
+        model.get_patchwise_projected_embeddings(
+            torch.rand(size=(2, 3, 448, 448)), normalize=True
+        )
     assert "This function is only implemented for evaluation mode" in str(ex)
     model.eval()
 
@@ -95,11 +97,21 @@ def test_image_get_patchwise_projected_embeddings(img_encoder_type: str) -> None
     # First check the model output is in the expected shape,
     # since this is used internally by get_patchwise_projected_embeddings
     model_output = model.forward(image)
-    assert model_output.projected_patch_embeddings.shape == (batch_size, joint_feature_size, h, w)
-    assert model_output.projected_global_embedding.shape == (batch_size, joint_feature_size)
+    assert model_output.projected_patch_embeddings.shape == (
+        batch_size,
+        joint_feature_size,
+        h,
+        w,
+    )
+    assert model_output.projected_global_embedding.shape == (
+        batch_size,
+        joint_feature_size,
+    )
     projected_global_embedding = model_output.projected_global_embedding
 
-    unnormalized_patch_embeddings = model.get_patchwise_projected_embeddings(image, normalize=False)
+    unnormalized_patch_embeddings = model.get_patchwise_projected_embeddings(
+        image, normalize=False
+    )
     # Make sure the projected embeddings returned are the right shape
     assert unnormalized_patch_embeddings.shape == (batch_size, h, w, joint_feature_size)
     result_1 = torch.mean(unnormalized_patch_embeddings, dim=(1, 2))  # B x W x H x D
@@ -107,7 +119,9 @@ def test_image_get_patchwise_projected_embeddings(img_encoder_type: str) -> None
     assert torch.allclose(result_1, result_2)
 
     # test normalized version
-    normalized_patch_embeddings = model.get_patchwise_projected_embeddings(image, normalize=True)
+    normalized_patch_embeddings = model.get_patchwise_projected_embeddings(
+        image, normalize=True
+    )
     assert normalized_patch_embeddings.shape == (batch_size, h, w, joint_feature_size)
     # Make sure the norm is 1 along the embedding dimension
     norm = normalized_patch_embeddings.norm(p=2, dim=-1)
@@ -119,11 +133,12 @@ def test_image_get_patchwise_projected_embeddings(img_encoder_type: str) -> None
 )
 @torch.no_grad()
 def test_hubconf() -> None:
-    """Test that instantiating the image model using the PyTorch Hub is consistent with older methods."""
+    """Test that instantiating the image model using the PyTorch Hub is
+    consistent with older methods."""
     image = torch.rand(1, 3, 480, 480)
 
-    github = 'microsoft/hi-ml:main'
-    model_hub = torch.hub.load(github, 'biovil_resnet', pretrained=True)
+    github = "microsoft/hi-ml:main"
+    model_hub = torch.hub.load(github, "biovil_resnet", pretrained=True)
     model_himl = get_biovil_image_encoder()
 
     output_hub: ImageModelOutput = model_hub(image)
@@ -139,11 +154,17 @@ def test_hubconf() -> None:
 
 def test_multi_image_model() -> None:
     joint_feature_size = 4
-    with pytest.raises(AssertionError, match="MultiImageModel only supports MultiImageEncoder"):
-        MultiImageModel(img_encoder_type=ImageEncoderType.RESNET18, joint_feature_size=joint_feature_size)
+    with pytest.raises(
+        AssertionError, match="MultiImageModel only supports MultiImageEncoder"
+    ):
+        MultiImageModel(
+            img_encoder_type=ImageEncoderType.RESNET18,
+            joint_feature_size=joint_feature_size,
+        )
 
     model = MultiImageModel(
-        img_encoder_type=ImageEncoderType.RESNET18_MULTI_IMAGE, joint_feature_size=joint_feature_size
+        img_encoder_type=ImageEncoderType.RESNET18_MULTI_IMAGE,
+        joint_feature_size=joint_feature_size,
     )
     assert model.encoder.training
     assert model.projector.training
@@ -153,5 +174,13 @@ def test_multi_image_model() -> None:
     image = torch.rand(size=(batch_size, 3, 448, 448))
     previous_image = torch.rand(size=(batch_size, 3, 448, 448))
     model_output = model.forward(image, previous_image)
-    assert model_output.projected_patch_embeddings.shape == (batch_size, joint_feature_size, 14, 14)
-    assert model_output.projected_global_embedding.shape == (batch_size, joint_feature_size)
+    assert model_output.projected_patch_embeddings.shape == (
+        batch_size,
+        joint_feature_size,
+        14,
+        14,
+    )
+    assert model_output.projected_global_embedding.shape == (
+        batch_size,
+        joint_feature_size,
+    )

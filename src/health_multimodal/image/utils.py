@@ -7,8 +7,8 @@ from enum import Enum, unique
 
 from .data.transforms import create_chest_xray_transform_for_inference
 from .inference_engine import ImageInferenceEngine
-from .model.pretrained import get_biovil_image_encoder
-from .model.pretrained import get_biovil_t_image_encoder
+from .model.pretrained import (get_biovil_image_encoder,
+                               get_biovil_t_image_encoder)
 
 TRANSFORM_RESIZE = 512
 
@@ -19,7 +19,9 @@ class ImageModelType(str, Enum):
     BIOVIL_T = "biovil_t"
 
 
-def get_image_inference(image_model_type: ImageModelType = ImageModelType.BIOVIL_T) -> ImageInferenceEngine:
+def get_image_inference(
+    image_model_type: ImageModelType = ImageModelType.BIOVIL_T,
+) -> ImageInferenceEngine:
     """Create a :class:`ImageInferenceEngine` for the image model.
 
     :param image_model_type: The type of image model to use, `BIOVIL` or `BIOVIL_T`.

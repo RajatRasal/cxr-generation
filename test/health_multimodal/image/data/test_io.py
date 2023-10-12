@@ -9,9 +9,8 @@ from tempfile import NamedTemporaryFile
 import numpy as np
 import pytest
 import SimpleITK as sitk
-from PIL import Image
-
 from health_multimodal.image.data.io import load_image, remap_to_uint8
+from PIL import Image
 
 
 def _assert_min_max_dtype(array: np.ndarray) -> None:
@@ -31,14 +30,16 @@ def test_load_image() -> None:
         _assert_min_max_dtype(array)
 
     array = np.arange(np.prod(size), dtype=np.uint8).reshape(*size)
-    image = Image.fromarray(array).convert('RGB')
-    for suffix in '.jpg', '.jpeg', '.png':
+    image = Image.fromarray(array).convert("RGB")
+    for suffix in ".jpg", ".jpeg", ".png":
         with NamedTemporaryFile(suffix=suffix) as file:
             image.save(file)
             _assertions(Path(file.name))
 
-    nifti_img = sitk.GetImageFromArray(np.arange(16, dtype=np.uint16).reshape(*size) + 100)
-    with NamedTemporaryFile(suffix='.nii.gz') as file:
+    nifti_img = sitk.GetImageFromArray(
+        np.arange(16, dtype=np.uint16).reshape(*size) + 100
+    )
+    with NamedTemporaryFile(suffix=".nii.gz") as file:
         sitk.WriteImage(nifti_img, file.name)
         _assertions(Path(file.name))
 

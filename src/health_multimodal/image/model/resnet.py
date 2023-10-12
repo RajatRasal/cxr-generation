@@ -7,9 +7,12 @@ from typing import Any, List, Tuple, Type, Union
 
 import torch
 from torch.hub import load_state_dict_from_url
-from torchvision.models.resnet import model_urls, ResNet, BasicBlock, Bottleneck
+from torchvision.models.resnet import (BasicBlock, Bottleneck, ResNet,
+                                       model_urls)
 
-TypeSkipConnections = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+TypeSkipConnections = Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]
 
 
 class ResNetHIML(ResNet):
@@ -25,8 +28,8 @@ class ResNetHIML(ResNet):
     def forward(
         self, x: torch.Tensor, return_intermediate_layers: bool = False
     ) -> Union[torch.Tensor, TypeSkipConnections]:
-        """ResNetHIML forward pass. Optionally returns intermediate layers using the
-        ``return_intermediate_layers`` argument.
+        """ResNetHIML forward pass. Optionally returns intermediate layers
+        using the ``return_intermediate_layers`` argument.
 
         :param return_intermediate_layers: If ``True``, return layers x0-x4 as a tuple,
             otherwise return x4 only.
@@ -67,21 +70,25 @@ def _resnet(
     return model
 
 
-def resnet18(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNetHIML:
+def resnet18(
+    pretrained: bool = False, progress: bool = True, **kwargs: Any
+) -> ResNetHIML:
     r"""ResNet-18 model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     :param pretrained: If ``True``, returns a model pre-trained on ImageNet.
     :param progress: If ``True``, displays a progress bar of the download to ``stderr``.
     """
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress, **kwargs)
+    return _resnet("resnet18", BasicBlock, [2, 2, 2, 2], pretrained, progress, **kwargs)
 
 
-def resnet50(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNetHIML:
+def resnet50(
+    pretrained: bool = False, progress: bool = True, **kwargs: Any
+) -> ResNetHIML:
     r"""ResNet-50 model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     :param pretrained: If ``True``, returns a model pre-trained on ImageNet
     :param progress: If ``True``, displays a progress bar of the download to ``stderr``.
     """
-    return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained, progress, **kwargs)
+    return _resnet("resnet50", Bottleneck, [3, 4, 6, 3], pretrained, progress, **kwargs)

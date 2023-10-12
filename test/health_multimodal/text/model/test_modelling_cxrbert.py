@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import torch
 import pytest
+import torch
 from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 
 from health_multimodal.text.model.configuration_cxrbert import CXRBertConfig
@@ -22,10 +22,19 @@ def test_model_instantiation() -> None:
         input_ids = torch.randint(0, 512, (batch_size, seq_length))
         attention_mask = torch.ones_like(input_ids)
         outputs = model(input_ids, attention_mask, output_cls_projected_embedding=True)
-        assert outputs.last_hidden_state.shape == (batch_size, seq_length, config.hidden_size)
-        assert outputs.cls_projected_embedding.shape == (batch_size, config.projection_size)
+        assert outputs.last_hidden_state.shape == (
+            batch_size,
+            seq_length,
+            config.hidden_size,
+        )
+        assert outputs.cls_projected_embedding.shape == (
+            batch_size,
+            config.projection_size,
+        )
 
-        projected_embeddings = model.get_projected_text_embeddings(input_ids, attention_mask)
+        projected_embeddings = model.get_projected_text_embeddings(
+            input_ids, attention_mask
+        )
         assert projected_embeddings.shape == (batch_size, config.projection_size)
         norm = torch.norm(projected_embeddings[0], p=2).item()
         assert pytest.approx(norm) == 1

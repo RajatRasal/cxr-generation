@@ -4,7 +4,6 @@
 #  -------------------------------------------------------------------------------------------
 
 import matplotlib.pyplot as plt
-
 from health_multimodal.common.visualization import _plot_bounding_boxes
 
 

@@ -7,8 +7,8 @@ from typing import Any, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from torch import nn
 from torch import Tensor as T
+from torch import nn
 from transformers import BertForMaskedLM
 from transformers.modeling_outputs import ModelOutput
 
@@ -50,13 +50,14 @@ class BertProjectionHead(nn.Module):
 
 
 class CXRBertModel(BertForMaskedLM):
-    """
-    Implements the CXR-BERT model outlined in the manuscript:
-    Boecking et al. "Making the Most of Text Semantics to Improve Biomedical Vision-Language Processing", 2022
-    https://link.springer.com/chapter/10.1007/978-3-031-20059-5_1
+    """Implements the CXR-BERT model outlined in the manuscript: Boecking et
+    al. "Making the Most of Text Semantics to Improve Biomedical Vision-
+    Language Processing", 2022
+    https://link.springer.com/chapter/10.1007/978-3-031-20059-5_1.
 
-    Extends the HuggingFace BertForMaskedLM model by adding a separate projection head. The projection "[CLS]" token is
-    used to align the latent vectors of image and text modalities.
+    Extends the HuggingFace BertForMaskedLM model by adding a separate
+    projection head. The projection "[CLS]" token is used to align the
+    latent vectors of image and text modalities.
     """
 
     config_class = CXRBertConfig  # type: ignore
@@ -81,7 +82,9 @@ class CXRBertModel(BertForMaskedLM):
         return_dict: Optional[bool] = None,
         **kwargs: Any
     ) -> Union[BERTTupleOutput, CXRBertOutput]:
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         bert_for_masked_lm_output = super().forward(
             input_ids=input_ids,
@@ -97,7 +100,9 @@ class CXRBertModel(BertForMaskedLM):
 
         last_hidden_state = bert_for_masked_lm_output.hidden_states[-1]
         cls_projected_embedding = (
-            self.cls_projection_head(last_hidden_state[:, 0, :]) if output_cls_projected_embedding else None
+            self.cls_projection_head(last_hidden_state[:, 0, :])
+            if output_cls_projected_embedding
+            else None
         )
 
         if return_dict:
@@ -105,7 +110,9 @@ class CXRBertModel(BertForMaskedLM):
                 last_hidden_state=last_hidden_state,
                 logits=bert_for_masked_lm_output.logits,
                 cls_projected_embedding=cls_projected_embedding,
-                hidden_states=bert_for_masked_lm_output.hidden_states if output_hidden_states else None,
+                hidden_states=bert_for_masked_lm_output.hidden_states
+                if output_hidden_states
+                else None,
                 attentions=bert_for_masked_lm_output.attentions,
             )
         else:
@@ -118,11 +125,14 @@ class CXRBertModel(BertForMaskedLM):
             )
 
     def get_projected_text_embeddings(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, normalize_embeddings: bool = True
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        normalize_embeddings: bool = True,
     ) -> torch.Tensor:
-        """
-        Returns l2-normalised projected cls token embeddings for the given input token ids and attention mask.
-        The joint latent space is trained using a contrastive objective between image and text data modalities.
+        """Returns l2-normalised projected cls token embeddings for the given
+        input token ids and attention mask. The joint latent space is trained
+        using a contrastive objective between image and text data modalities.
 
         :param input_ids: (batch_size, sequence_length)
         :param attention_mask: (batch_size, sequence_length)
@@ -131,7 +141,10 @@ class CXRBertModel(BertForMaskedLM):
         """
 
         outputs = self.forward(
-            input_ids=input_ids, attention_mask=attention_mask, output_cls_projected_embedding=True, return_dict=True
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_cls_projected_embedding=True,
+            return_dict=True,
         )
         assert isinstance(outputs, CXRBertOutput)
 

@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import requests
+from health_multimodal.image import ImageInferenceEngine
+from health_multimodal.image.data.transforms import \
+    create_chest_xray_transform_for_inference
+from health_multimodal.image.model.pretrained import get_biovil_t_image_encoder
 from torchvision.datasets.utils import check_integrity
 
-from health_multimodal.image import ImageInferenceEngine
-from health_multimodal.image.data.transforms import create_chest_xray_transform_for_inference
-from health_multimodal.image.model.pretrained import get_biovil_t_image_encoder
 from health_multimodal.text.utils import BertEncoderType, get_bert_inference
 from health_multimodal.vlp.inference_engine import ImageTextInferenceEngine
 
@@ -27,7 +28,9 @@ class ClassType(str, Enum):
 def _get_vlp_inference_engine() -> ImageTextInferenceEngine:
     image_inference = ImageInferenceEngine(
         image_model=get_biovil_t_image_encoder(),
-        transform=create_chest_xray_transform_for_inference(resize=RESIZE, center_crop_size=CENTER_CROP_SIZE),
+        transform=create_chest_xray_transform_for_inference(
+            resize=RESIZE, center_crop_size=CENTER_CROP_SIZE
+        ),
     )
     img_txt_inference = ImageTextInferenceEngine(
         image_inference_engine=image_inference,
@@ -37,31 +40,29 @@ def _get_vlp_inference_engine() -> ImageTextInferenceEngine:
 
 
 def _get_default_text_prompts_for_pneumonia() -> Tuple[List, List]:
-    """
-    Get the default text prompts for presence and absence of pneumonia
-    """
+    """Get the default text prompts for presence and absence of pneumonia."""
     pos_query = [
-        'Findings consistent with pneumonia',
-        'Findings suggesting pneumonia',
-        'This opacity can represent pneumonia',
-        'Findings are most compatible with pneumonia',
+        "Findings consistent with pneumonia",
+        "Findings suggesting pneumonia",
+        "This opacity can represent pneumonia",
+        "Findings are most compatible with pneumonia",
     ]
     neg_query = [
-        'There is no pneumonia',
-        'No evidence of pneumonia',
-        'No evidence of acute pneumonia',
-        'No signs of pneumonia',
+        "There is no pneumonia",
+        "No evidence of pneumonia",
+        "No evidence of acute pneumonia",
+        "No signs of pneumonia",
     ]
 
     return pos_query, neg_query
 
 
-def save_img_from_url(image_url: str, local_path: Union[str, Path], md5: Optional[str] = None) -> None:
-    """
-    Pull an image from a URL and save it to a local path
-    """
+def save_img_from_url(
+    image_url: str, local_path: Union[str, Path], md5: Optional[str] = None
+) -> None:
+    """Pull an image from a URL and save it to a local path."""
     img_data = requests.get(image_url, timeout=30).content
-    with open(local_path, 'wb') as handler:
+    with open(local_path, "wb") as handler:
         handler.write(img_data)
 
     if md5 is not None:
@@ -69,9 +70,8 @@ def save_img_from_url(image_url: str, local_path: Union[str, Path], md5: Optiona
 
 
 def test_zero_shot_pneumonia_classification() -> None:
-    """
-    Checks latent similarity between text prompts and image embeddings for presence and absence of pneumonia
-    """
+    """Checks latent similarity between text prompts and image embeddings for
+    presence and absence of pneumonia."""
     input_data = [
         (
             "https://openi.nlm.nih.gov/imgs/512/173/1777/CXR1777_IM-0509-1001.png",

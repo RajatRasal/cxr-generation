@@ -3,7 +3,7 @@
 #  Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 #  -------------------------------------------------------------------------------------------
 
-"""Text-related tools
+"""Text-related tools.
 
 .. currentmodule:: health_multimodal.text
 
@@ -29,17 +29,12 @@
 
    configuration_cxrbert
    modelling_cxrbert
-
 """
 
 from .data.io import TypePrompts
-from .utils import get_bert_inference
 from .inference_engine import TextInferenceEngine
-from .model import CXRBertModel
-from .model import CXRBertOutput
-from .model import CXRBertConfig
-from .model import CXRBertTokenizer
-
+from .model import CXRBertConfig, CXRBertModel, CXRBertOutput, CXRBertTokenizer
+from .utils import get_bert_inference
 
 __all__ = [
     "TypePrompts",

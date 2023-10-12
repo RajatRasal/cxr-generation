@@ -3,8 +3,7 @@
 #  Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 #  -------------------------------------------------------------------------------------------
 
-"""Image-related tools
-
+"""Image-related tools.
 
 .. currentmodule:: health_multimodal.image
 
@@ -37,12 +36,9 @@
    types
 """
 
-from .model import BaseImageModel
-from .model import ImageModel
-from .model import ImageEncoderType
 from .inference_engine import ImageInferenceEngine
+from .model import BaseImageModel, ImageEncoderType, ImageModel
 from .utils import get_image_inference
-
 
 __all__ = [
     "BaseImageModel",

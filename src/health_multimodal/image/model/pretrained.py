@@ -15,7 +15,6 @@ from torchvision.models.resnet import model_urls
 from .model import ImageModel
 from .types import ImageEncoderType, ImageEncoderWeightTypes
 
-
 JOINT_FEATURE_SIZE = 128
 
 BIOMED_VLP_CXR_BERT_SPECIALIZED = "microsoft/BiomedVLP-CXR-BERT-specialized"
@@ -30,9 +29,7 @@ BIOVIL_IMAGE_WEIGHTS_URL = f"{HF_URL}/{BIOMED_VLP_CXR_BERT_SPECIALIZED}/resolve/
 BIOVIL_IMAGE_WEIGHTS_MD5 = "02ce6ee460f72efd599295f440dbb453"
 
 BIOVIL_T_IMAGE_WEIGHTS_NAME = "biovil_t_image_model_proj_size_128.pt"
-BIOVIL_T_IMAGE_WEIGHTS_URL = (
-    f"{HF_URL}/{BIOMED_VLP_BIOVIL_T}/resolve/{BIOVIL_T_COMMIT_TAG}/{BIOVIL_T_IMAGE_WEIGHTS_NAME}"  # noqa: E501
-)
+BIOVIL_T_IMAGE_WEIGHTS_URL = f"{HF_URL}/{BIOMED_VLP_BIOVIL_T}/resolve/{BIOVIL_T_COMMIT_TAG}/{BIOVIL_T_IMAGE_WEIGHTS_NAME}"  # noqa: E501
 BIOVIL_T_IMAGE_WEIGHTS_MD5 = "a83080e2f23aa584a4f2b24c39b1bb64"
 
 
@@ -58,14 +55,19 @@ def _download_biovil_t_image_model_weights() -> Path:
     """
     root_dir = tempfile.gettempdir()
     download_url(
-        BIOVIL_T_IMAGE_WEIGHTS_URL, root=root_dir, filename=BIOVIL_T_IMAGE_WEIGHTS_NAME, md5=BIOVIL_T_IMAGE_WEIGHTS_MD5
+        BIOVIL_T_IMAGE_WEIGHTS_URL,
+        root=root_dir,
+        filename=BIOVIL_T_IMAGE_WEIGHTS_NAME,
+        md5=BIOVIL_T_IMAGE_WEIGHTS_MD5,
     )
     return Path(root_dir, BIOVIL_T_IMAGE_WEIGHTS_NAME)
 
 
 def get_biovil_image_encoder(pretrained: bool = True) -> ImageModel:
     """Download weights from Hugging Face and instantiate the image model."""
-    resnet_checkpoint_path = _download_biovil_image_model_weights() if pretrained else None
+    resnet_checkpoint_path = (
+        _download_biovil_image_model_weights() if pretrained else None
+    )
 
     image_model = ImageModel(
         img_encoder_type=ImageEncoderType.RESNET50,
@@ -89,7 +91,8 @@ def get_biovil_t_image_encoder() -> ImageModel:
 
 
 def get_imagenet_init_encoder() -> ImageModel:
-    """Download ImageNet pre-trained weights and instantiate the image model."""
+    """Download ImageNet pre-trained weights and instantiate the image
+    model."""
 
     state_dict = load_state_dict_from_url(model_urls[ImageEncoderType.RESNET50])
     image_model = ImageModel(
@@ -103,6 +106,7 @@ def get_imagenet_init_encoder() -> ImageModel:
 
 def get_image_encoder(weights: str) -> ImageModel:
     """Instantiate image model with random or pre-trained weights.
+
     :param weights: Select one of `random`, `imagenet`, `biovil`, `biovil_t`
     """
 

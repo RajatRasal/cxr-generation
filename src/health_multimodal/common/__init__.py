@@ -13,3 +13,9 @@
    device
    visualization
 """
+
+from .visualization import plot_phrase_grounding_similarity_map
+
+__all__ = [
+    plot_phrase_grounding_similarity_map
+]

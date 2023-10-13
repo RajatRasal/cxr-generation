@@ -11,3 +11,4 @@ transformers==4.17.0
 matplotlib>=3.5
 numpy>=1.22
 scipy==1.11.3
+Cython==3.0.3

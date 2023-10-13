@@ -21,8 +21,10 @@ class BertEncoderType(str, Enum):
 
 
 def get_biovil_t_bert() -> Tuple[CXRBertTokenizer, CXRBertModel]:
-    """Load the BioViL-T Bert model and tokenizer from the `Hugging Face Hub
-    <https://huggingface.co/microsoft/BiomedVLP-BioViL-T>`_."""  # noqa: B950
+    """Load the BioViL-T Bert model and tokenizer from the `Hugging Face Hub.
+
+    <https://huggingface.co/microsoft/BiomedVLP-BioViL-T>`_.
+    """  # noqa: B950
     tokenizer = CXRBertTokenizer.from_pretrained(
         BIOMED_VLP_BIOVIL_T, revision=BIOVIL_T_COMMIT_TAG
     )
@@ -33,8 +35,10 @@ def get_biovil_t_bert() -> Tuple[CXRBertTokenizer, CXRBertModel]:
 
 
 def get_cxr_bert() -> Tuple[CXRBertTokenizer, CXRBertModel]:
-    """Load the CXR-BERT model and tokenizer from the `Hugging Face Hub
-    <https://huggingface.co/microsoft/BiomedVLP-CXR-BERT-specialized>`_."""  # noqa: B950
+    """Load the CXR-BERT model and tokenizer from the `Hugging Face Hub.
+
+    <https://huggingface.co/microsoft/BiomedVLP-CXR-BERT-specialized>`_.
+    """  # noqa: B950
     tokenizer = CXRBertTokenizer.from_pretrained(
         BIOMED_VLP_CXR_BERT_SPECIALIZED, revision=CXR_BERT_COMMIT_TAG
     )

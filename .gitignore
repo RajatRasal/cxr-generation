@@ -6,7 +6,7 @@
 *.swp
 *.swo
 
-.python_version
+.python-version
 
 dist
 

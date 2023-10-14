@@ -1,11 +1,20 @@
 python_requirements(
     name="reqs",
-    module_mapping={"SimpleITK": ["SimpleITK"]},
+    module_mapping={
+        "SimpleITK": ["SimpleITK"],
+        "huggingface-hub": ["huggingface_hub"],
+    },
 )
 
 python_requirements(
     name="reqs_test",
-    module_mapping={"SimpleITK": ["SimpleITK"]},
+    module_mapping={
+        # SimpleITK is needed here because the library is called simple_itk in pypi
+        # and also referred to with that name in the default.lock .
+        "SimpleITK": ["SimpleITK"],
+        "huggingface-hub": ["huggingface_hub"],
+        "importlib-metadata": ["importlib_metadata"],
+    },
     resolve="pytest",
 )
 

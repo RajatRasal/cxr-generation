@@ -1,6 +1,9 @@
 [GLOBAL]
 pants_version = "2.17.0"
 backend_packages.add = [
+  "pants.backend.shell",
+  "pants.backend.shell.lint.shellcheck",
+  "pants.backend.shell.lint.shfmt",
   "pants.backend.build_files.fmt.black",  
   "pants.backend.python",
   "pants.backend.python.lint.autoflake",
@@ -11,6 +14,10 @@ backend_packages.add = [
   "pants.backend.python.lint.isort",
   "pants.backend.python.typecheck.mypy",
 ]
+
+[shfmt]
+# See https://github.com/mvdan/sh/blob/master/cmd/shfmt/shfmt.1.scd#printer-flags.
+args = ["-i 4", "-ci", "-sr"]
 
 [anonymous-telemetry]
 enabled = false

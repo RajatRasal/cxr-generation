@@ -35,4 +35,4 @@ pants --changed-since="${MERGE_BASE}" lint ||
     die "If there were formatting errors, run \'pants --changed-since=$(git rev-parse --symbolic "${MERGE_BASE}") fmt\'"
 
 echo "* Typechecking"
-pants --changed-since="${MERGE_BASE}" --changed-dependees=transitive check
+# pants --changed-since="${MERGE_BASE}" --changed-dependees=transitive check

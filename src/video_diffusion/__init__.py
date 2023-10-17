@@ -1,1 +1,1 @@
-from .model import Unet3D, GaussianDiffusion, Trainer
+from .model import GaussianDiffusion, Trainer, Unet3D

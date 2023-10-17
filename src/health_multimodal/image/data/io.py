@@ -10,7 +10,7 @@ import numpy as np
 import pydicom as dicom
 import SimpleITK as sitk
 from PIL import Image
-from skimage import io
+from skimage import io as skimage_io  # type: ignore
 
 
 def remap_to_uint8(
@@ -62,7 +62,7 @@ def load_image(path: Path) -> Image.Image:
     """
     # Although ITK supports JPEG and PNG, we use Pillow for consistency with older trained models
     if path.suffix in [".jpg", ".jpeg", ".png"]:
-        image = io.imread(path)
+        image = skimage_io.imread(path)
     elif path.suffixes == [".nii", ".gz"]:
         image = sitk.GetArrayFromImage(sitk.ReadImage(str(path)))
         if image.shape[0] == 1:

@@ -12,44 +12,43 @@ HOOK_SRC_DIR="${REPO_ROOT}/build_support/githooks"
 HOOK_NAMES="$(ls "${HOOK_SRC_DIR}")"
 
 RELPATH_PREFIX="$(
-  cat << EOF | ${PYENV_ROOT}/versions/3.9.18/bin/python3
+    cat << EOF | "${PYENV_ROOT}"/versions/3.9.18/bin/python3
 import os
-
 print(os.path.relpath("${HOOK_SRC_DIR}", "${HOOK_DIR}"))
 EOF
 )"
 
 function install_hook() {
-  HOOK=$1
-  RELPATH="${RELPATH_PREFIX}/${HOOK}"
-  (
-    cd "${HOOK_DIR}" &&
-      rm -f "${HOOK}" &&
-      ln -s "${RELPATH}" "${HOOK}" &&
-      echo "${HOOK} hook linked to $(pwd)/${HOOK}"
-  )
+    HOOK=$1
+    RELPATH="${RELPATH_PREFIX}/${HOOK}"
+    (
+        cd "${HOOK_DIR}" &&
+            rm -f "${HOOK}" &&
+            ln -s "${RELPATH}" "${HOOK}" &&
+            echo "${HOOK} hook linked to $(pwd)/${HOOK}"
+    )
 }
 
 function ensure_hook() {
-  HOOK=$1
-  HOOK_SRC="${REPO_ROOT}/build_support/githooks/${HOOK}"
-  HOOK_DST="${HOOK_DIR}/${HOOK}"
+    HOOK=$1
+    HOOK_SRC="${REPO_ROOT}/build_support/githooks/${HOOK}"
+    HOOK_DST="${HOOK_DIR}/${HOOK}"
 
-  if [[ ! -e "${HOOK_DST}" ]]; then
-    install_hook "${HOOK}"
-  else
-    if cmp --quiet "${HOOK_SRC}" "${HOOK_DST}"; then
-      echo "${HOOK} hook up to date."
-    else
-      read -rp "A ${HOOK} hook already exists, replace with ${HOOK_SRC}? [Yn]" ok
-      if [[ "${ok:-Y}" =~ ^[yY]([eE][sS])?$ ]]; then
+    if [[ ! -e "${HOOK_DST}" ]]; then
         install_hook "${HOOK}"
-      else
-        echo "${HOOK} hook not installed"
-        exit 1
-      fi
+    else
+        if cmp --quiet "${HOOK_SRC}" "${HOOK_DST}"; then
+            echo "${HOOK} hook up to date."
+        else
+            read -rp "A ${HOOK} hook already exists, replace with ${HOOK_SRC}? [Yn]" ok
+            if [[ "${ok:-Y}" =~ ^[yY]([eE][sS])?$ ]]; then
+                install_hook "${HOOK}"
+            else
+                echo "${HOOK} hook not installed"
+                exit 1
+            fi
+        fi
     fi
-  fi
 }
 
 # Make sure users of recent git don't have their history polluted
@@ -57,5 +56,5 @@ function ensure_hook() {
 git config --local blame.ignoreRevsFile .git-blame-ignore-revs
 
 for HOOK in ${HOOK_NAMES}; do
-  ensure_hook "${HOOK}"
+    ensure_hook "${HOOK}"
 done

@@ -15,10 +15,9 @@ from health_multimodal.image import (ImageEncoderType, ImageInferenceEngine,
 from health_multimodal.image.data.transforms import \
     create_chest_xray_transform_for_inference
 from health_multimodal.image.model.pretrained import JOINT_FEATURE_SIZE
-from PIL import Image
-
 from health_multimodal.text.utils import get_bert_inference
 from health_multimodal.vlp.inference_engine import ImageTextInferenceEngine
+from PIL import Image
 
 CENTER_CROP_SIZE = 480
 

@@ -7,7 +7,6 @@ from typing import Callable
 
 import pytest
 import torch
-
 from health_multimodal.text.inference_engine import TextInferenceEngine
 from health_multimodal.text.utils import get_biovil_t_bert, get_cxr_bert
 

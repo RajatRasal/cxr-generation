@@ -8,10 +8,9 @@ from health_multimodal.image import ImageInferenceEngine
 from health_multimodal.image.data.transforms import \
     create_chest_xray_transform_for_inference
 from health_multimodal.image.model.pretrained import get_biovil_t_image_encoder
-from torchvision.datasets.utils import check_integrity
-
 from health_multimodal.text.utils import BertEncoderType, get_bert_inference
 from health_multimodal.vlp.inference_engine import ImageTextInferenceEngine
+from torchvision.datasets.utils import check_integrity
 
 RESIZE = 512
 CENTER_CROP_SIZE = 512

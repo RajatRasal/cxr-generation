@@ -4,7 +4,6 @@
 #  -------------------------------------------------------------------------------------------
 
 import pytest
-
 from health_multimodal.text import TypePrompts
 from health_multimodal.text.utils import get_bert_inference
 

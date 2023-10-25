@@ -25,3 +25,6 @@ regex>2019.12.17
 safetensors>=0.3.1
 requests==2.31.0
 pytest==6.2.2
+blobfile>=1.0.5
+mpi4py==3.1.5
+setuptools==68.2.2

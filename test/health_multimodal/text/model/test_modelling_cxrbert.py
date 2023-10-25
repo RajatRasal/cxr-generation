@@ -9,10 +9,9 @@ from tempfile import TemporaryDirectory
 
 import pytest
 import torch
-from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
-
 from health_multimodal.text.model.configuration_cxrbert import CXRBertConfig
 from health_multimodal.text.model.modelling_cxrbert import CXRBertModel
+from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 
 
 def test_model_instantiation() -> None:

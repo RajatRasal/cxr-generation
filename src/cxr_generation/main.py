@@ -1,8 +1,7 @@
 import torch
+from video_diffusion.model_2d import GaussianDiffusion, Unet2D
 
-from video_diffusion import GaussianDiffusion, Unet3D
-
-model = Unet3D(
+model = Unet2D(
     dim=64,
     use_bert_text_cond=True,  # this must be set to True to auto-use the bert model dimensions
     dim_mults=(1, 2, 4, 8),
@@ -11,12 +10,11 @@ model = Unet3D(
 diffusion = GaussianDiffusion(
     model,
     image_size=32,  # height and width of frames
-    num_frames=5,  # number of video frames
     timesteps=1000,  # number of steps
     loss_type="l1",  # L1 or L2
 )
 
-videos = torch.randn(3, 3, 5, 32, 32)  # video (batch, channels, frames, height, width)
+videos = torch.randn(3, 3, 32, 32)  # video (batch, channels, height, width)
 
 text = [
     "a whale breaching from afar",

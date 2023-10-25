@@ -11,3 +11,6 @@
 dist
 
 pants
+
+.DS_Store
+__pycache__/

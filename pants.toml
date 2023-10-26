@@ -14,6 +14,8 @@ backend_packages.add = [
   "pants.backend.python.lint.isort",
   "pants.backend.python.typecheck.mypy",
 ]
+local_store_dir = "/vol/biomedic3/rrr2417/.cache/lmdb_store"
+named_caches_dir = "/vol/biomedic3/rrr2417/.cache/named_caches"
 
 [shfmt]
 # See https://github.com/mvdan/sh/blob/master/cmd/shfmt/shfmt.1.scd#printer-flags.

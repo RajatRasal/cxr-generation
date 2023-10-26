@@ -5,6 +5,15 @@ pex_binary(
     entry_point="./image_train.py",
     dependencies=[
         "3rdparty:reqs#setuptools",
+    ],
+    args=["--data_dir", "./.improved_diffusion_training"],
+)
+
+pex_binary(
+    name="train_linux",
+    entry_point="./image_train.py",
+    dependencies=[
+        "3rdparty:reqs#setuptools",
         "3rdparty:reqs#triton",
         "3rdparty:reqs#nvidia-cublas-cu12",
         "3rdparty:reqs#nvidia-cuda-cupti-cu12",
@@ -19,5 +28,5 @@ pex_binary(
         "3rdparty:reqs#nvidia-nvtx-cu12",
     ],
     args=["--data_dir", "./.improved_diffusion_training"],
+    platforms=["linux_x86_64-cp-39-cp39m"],
 )
-

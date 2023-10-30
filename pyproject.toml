@@ -1,0 +1,44 @@
+[tool.poetry]
+name = "cxr-generation"
+version = "0.1.0"
+description = ""
+authors = ["Rajat Rasal"]
+readme = "README.md"
+packages = [
+    { include = "improved_diffusion", from = "src" },
+]
+
+[tool.poetry.scripts]
+image_train = "improved_diffusion.scripts.image_train:main"
+
+[tool.poetry.dependencies]
+python = "3.9.18"
+torch = "2.1.0"
+pillow = "9.3.0"
+numpy = "1.26.0"
+blobfile = "1.0.5"
+mpi4py = "3.1.5"
+setuptools = "68.2.2"
+
+[tool.poetry.group.gpu]
+optional = true
+
+[tool.poetry.group.gpu.dependencies]
+triton = "2.1.0"
+nvidia-cuda-nvrtc-cu12 = "12.1.105"
+nvidia-cuda-runtime-cu12 = "12.1.105"
+nvidia-cuda-cupti-cu12 = "12.1.105"
+nvidia-cudnn-cu12 = "8.9.2.26"
+nvidia-cublas-cu12 = "12.1.3.1"
+nvidia-cufft-cu12 = "11.0.2.54"
+nvidia-curand-cu12 = "10.3.2.106"
+nvidia-cusolver-cu12 = "11.4.5.107"
+nvidia-cusparse-cu12 = "12.1.0.106"
+nvidia-nccl-cu12 = "2.18.1"
+nvidia-nvtx-cu12 = "12.1.105"
+nvidia-nvjitlink-cu12 = "12.3.52"
+
+[build-system]
+requires = ["poetry-core==1.7.*"]
+build-backend = "poetry.core.masonry.api"
+

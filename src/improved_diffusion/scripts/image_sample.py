@@ -10,7 +10,7 @@ import os
 import numpy as np
 import torch as th
 import torch.distributed as dist
-from improved_diffusion.script_util import (NUM_CLASSES, add_dict_to_argparser,
+from improved_diffusion.improved_diffusion.script_util import (NUM_CLASSES, add_dict_to_argparser,
                                             args_to_dict,
                                             create_model_and_diffusion,
                                             model_and_diffusion_defaults)

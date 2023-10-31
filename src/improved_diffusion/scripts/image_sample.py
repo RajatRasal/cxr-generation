@@ -15,7 +15,7 @@ from improved_diffusion.improved_diffusion.script_util import (NUM_CLASSES, add_
                                             create_model_and_diffusion,
                                             model_and_diffusion_defaults)
 
-from improved_diffusion import dist_util, logger
+from improved_diffusion.improved_diffusion import dist_util, logger
 
 
 def main():

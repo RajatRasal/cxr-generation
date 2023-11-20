@@ -6,12 +6,14 @@ authors = ["Rajat Rasal"]
 readme = "README.md"
 packages = [
     { include = "improved_diffusion", from = "src" },
+    { include = "glide", from = "src" },
 ]
 
 [tool.poetry.scripts]
 image_train = "improved_diffusion.scripts.image_train:main"
 image_sample = "improved_diffusion.scripts.image_sample:main"
 display_samples = "improved_diffusion.scripts.npz_to_image:main"
+dataset = "glide.glide_text2im.dataset:main"
 
 [tool.poetry.dependencies]
 python = "3.9.18"
@@ -22,6 +24,8 @@ blobfile = "1.0.5"
 mpi4py = "3.1.5"
 setuptools = "68.2.2"
 matplotlib = "3.8.0"
+pandas = "2.1.3"
+tqdm = "4.66.1"
 
 [tool.poetry.group.gpu]
 optional = true

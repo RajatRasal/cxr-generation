@@ -13,9 +13,18 @@ from tqdm import tqdm
 def extract_reports(reports_root_path: str, out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
     # TODO: Verify reports zip SHA
-    zip = os.path.join(reports_root_path, "mimic-cxr-reports.zip")
-    with ZipFile(zip, "r") as f:
+    _zip = os.path.join(reports_root_path, "mimic-cxr-reports.zip")
+    with ZipFile(_zip, "r") as f:
         f.extractall(out_dir)
+
+
+def get_metadata(splits_path: str, out_path: str):
+    # TODO: Verify SHA
+    train_df = pd.read_csv(os.path.join(splits_path, "train.csv"))
+    val_df = pd.read_csv(os.path.join(splits_path, "valid.csv"))
+    test_df = pd.read_csv(os.path.join(splits_path, "test.csv"))
+    df = pd.concat([train_df, val_df, test_df])
+    df.to_csv(os.path.join(out_path, "metadata.csv"))
 
 
 @dataclass
@@ -39,61 +48,51 @@ def parse_report(path: str) -> MIMICCXRReport:
     return MIMICCXRReport(findings, impression)
 
 
-CXR_VIEWS = Literal["AP", "PA", "LATERAL", "LL"]
+CXR_VIEWS = Literal["AP", "PA"]
 
 
-class MIMICCXR(Dataset):
+class CustomMIMICCXR(Dataset):
 
-    SPLIT_FILE = "mimic-cxr-2.0.0-split.csv.gz"
-    METADATA_FILE = "mimic-cxr-2.0.0-metadata.csv.gz"
+    def __init__(
+        self,
+        metadata_file_path: str,
+        preproc_path: str,
+        reports_path: Optional[str] = None,
+        views: Optional[List[CXR_VIEWS]] = None
+    ):
+        self.metadata_file_path = metadata_file_path
+        self.preproc_path = preproc_path
+        self.reports_path = reports_path
+        self.views = get_args(CXR_VIEWS) if views is None else views
 
-    def __init__(self, images_root_path: str, split: Literal["train", "val", "test"], views: Optional[List[CXR_VIEWS]] = None, reports_extracted_path: Optional[str] = None):
-        self.split = "validate" if split == "val" else split
-        self.images_root_path = images_root_path
-        self.reports_extracted_path = reports_extracted_path
-        self.views = views
-
-        # TODO: verify files and SHAs
-        self.splits_file = pd.read_csv(os.path.join(self.images_root_path, self.SPLIT_FILE))
-        self.metadata_file = pd.read_csv(os.path.join(self.images_root_path, self.METADATA_FILE))
-        self.joined = pd.concat([self.metadata_file, self.splits_file], axis=1)
-        self.joined = self.joined.loc[:, ~self.joined.columns.duplicated()]
-        print(self.joined.ViewPosition.value_counts())
-        print(self.joined.ViewPosition.isin(self.views).sum())
-        mask = self.joined.split == self.split
-        if self.views is not None:
-            mask &= self.joined.ViewPosition.isin(self.views)
-        self.df = self.joined[mask].reset_index()
-
+        df = pd.read_csv(self.metadata_file_path)
+        mask = df.ViewPosition.isin(self.views)
+        self.df = df[mask].reset_index()
         subject_id = self.df.subject_id.astype(str)
         study_id = self.df.study_id.astype(str)
-        subpath = "/p" + subject_id.str[0:2] + "/p" + subject_id + "/s" + study_id
-        images_path = "files" + subpath + "/" + self.df.dicom_id + ".jpg"
-        self.images_path = images_path.map(lambda x: os.path.join(self.images_root_path, x))
-        if self.reports_extracted_path is not None:
-            reports_path = "files" + subpath + ".txt" 
-            self.reports_path = reports_path.map(lambda x: os.path.join(self.reports_extracted_path, x))
+        reports_path_suffix = "files" + "/p" + subject_id.str[0:2] + "/p" + subject_id + "/s" + study_id + ".txt"
+        self.full_reports_path = reports_path_suffix.map(lambda x: os.path.join(self.reports_path, x))
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
         metadata = self.df.iloc[idx]
-        image = Image.open(self.images_path.iloc[idx])
-        report = None if self.reports_extracted_path is None else parse_report(self.reports_path.iloc[idx])
+        image_path = os.path.join(self.preproc_path, self.df.path_preproc.iloc[idx])
+        image = Image.open(image_path)
+        report = None if self.reports_path is None else parse_report(self.full_reports_path.iloc[idx])
         return metadata, image, report
 
 
 def main():
-    reports_extracted_path = ".tmp/mimic_reports/"
+    metadata_file_path = "/vol/biomedic3/rrr2417/cxr-generation/metadata.csv"
+    preproc_path = "/vol/biodata/data/chest_xray/mimic-cxr-jpg-224/data/"
+    reports_extracted_path = "/vol/biomedic3/rrr2417/cxr-generation/.tmp/mimic_reports/"
     # extract_reports("/vol/biodata/data/chest_xray/mimic-cxr", reports_extracted_path)
 
-    images_path = "/vol/biodata/data/chest_xray/mimic-cxr-jpg/"
-    train = MIMICCXR(images_path, "train", views=["PA"])  # , reports_extracted_path)
-    print(train.df.shape)
-
-    for metadata, image, report in tqdm(train):
-        break
-        pass
-        # print(np.array(image).shape)
-        # break
+    dataset = CustomMIMICCXR(metadata_file_path, preproc_path, reports_extracted_path)
+    print(len(dataset))
+    for i, (metadata, image_path, report) in enumerate(dataset):
+        if i % 100 == 0:
+            print(i)
+        

@@ -16,3 +16,5 @@ pants
 __pycache__/
 
 .tmp
+
+*.csv

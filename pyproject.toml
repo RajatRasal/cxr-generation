@@ -7,6 +7,7 @@ readme = "README.md"
 packages = [
     { include = "improved_diffusion", from = "src" },
     { include = "glide", from = "src" },
+    { include = "dataset", from = "src" },
 ]
 
 [tool.poetry.scripts]
@@ -14,6 +15,7 @@ image_train = "improved_diffusion.scripts.image_train:main"
 image_sample = "improved_diffusion.scripts.image_sample:main"
 display_samples = "improved_diffusion.scripts.npz_to_image:main"
 dataset = "glide.glide_text2im.dataset:main"
+format_reports = "dataset.create_section_files:cli"
 
 [tool.poetry.dependencies]
 python = "3.9.18"
@@ -48,4 +50,3 @@ nvidia-nvjitlink-cu12 = "12.3.52"
 [build-system]
 requires = ["poetry-core==1.7.*"]
 build-backend = "poetry.core.masonry.api"
-

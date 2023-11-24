@@ -1,12 +1,12 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import List, Literal, Optional, get_args
+from typing import List, Literal, Optional, Tuple, get_args
 from zipfile import ZipFile
 
 import pandas as pd
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 
@@ -33,7 +33,7 @@ class MIMICCXRReport:
     impressions: Optional[str]
 
 
-def parse_report(path: str) -> MIMICCXRReport:
+def parse_report(path: str) -> Tuple[str, str]:
     # TODO: Make this more efficient - using a single pass
     findings = None
     impression = None
@@ -45,7 +45,7 @@ def parse_report(path: str) -> MIMICCXRReport:
                 findings = raw_section[len(" FINDINGS: "):].replace("\n", "")
             elif raw_section.startswith(" IMPRESSION: "):
                 impression = raw_section[len(" IMPRESSION: "):].replace("\n", "")
-    return MIMICCXRReport(findings, impression)
+    return findings, impression
 
 
 CXR_VIEWS = Literal["AP", "PA"]
@@ -84,15 +84,37 @@ class CustomMIMICCXR(Dataset):
         return metadata, image, report
 
 
+def _batcher(x):
+    return x
+
+
+def format_reports():
+    reports_extracted_path = "/vol/biomedic3/rrr2417/cxr-generation/.tmp/mimic_reports/"
+    # reports_source = "/vol/biodata/data/chest_xray/mimic-cxr"
+    # extract_reports("/vol/biodata/data/chest_xray/mimic-cxr", reports_extracted_path)
+    report_data = []
+    for i, (root, dirs, files) in enumerate(os.walk(reports_extracted_path)):
+        # if i % 1000 == 0:
+        if i == 2000:
+            print(f"Parsed {i} reports...")
+            break
+        for file in files:
+            if file.endswith(".txt"):
+                report_file = os.path.join(root, file)
+                report_data.append((report_file, *parse_report(report_file)))
+    df = pd.DataFrame(report_data, columns=["full_report_path", "findings", "impression"])
+    df.to_csv("reports.csv")
+
+
 def main():
     metadata_file_path = "/vol/biomedic3/rrr2417/cxr-generation/metadata.csv"
     preproc_path = "/vol/biodata/data/chest_xray/mimic-cxr-jpg-224/data/"
     reports_extracted_path = "/vol/biomedic3/rrr2417/cxr-generation/.tmp/mimic_reports/"
-    # extract_reports("/vol/biodata/data/chest_xray/mimic-cxr", reports_extracted_path)
 
     dataset = CustomMIMICCXR(metadata_file_path, preproc_path, reports_extracted_path)
-    print(len(dataset))
-    for i, (metadata, image_path, report) in enumerate(dataset):
-        if i % 100 == 0:
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=15, collate_fn=_batcher)
+
+    for i, x in enumerate(dataloader):
+        if i % 10 == 0:
             print(i)
-        
+

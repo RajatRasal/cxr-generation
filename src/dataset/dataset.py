@@ -1,13 +1,15 @@
 import os
-import re
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Tuple, get_args
+from typing import List, Literal, Optional, get_args
 from zipfile import ZipFile
 
+import numpy as np
 import pandas as pd
 from PIL import Image
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from tqdm import tqdm
+
+from dataset.embed_reports import ENCODER_MODEL, SECTION_NAME, read_embedding_file
 
 
 def extract_reports(reports_root_path: str, out_dir: str):
@@ -33,7 +35,7 @@ class MIMICCXRReport:
     impressions: Optional[str]
 
 
-CXR_VIEWS = Literal["AP", "PA"]
+CXR_VIEW = Literal["AP", "PA"]
 
 
 class CustomMIMICCXR(Dataset):
@@ -43,24 +45,35 @@ class CustomMIMICCXR(Dataset):
         metadata_file_path: str,
         preproc_path: str,
         section_files_path: str,
-        views: Optional[List[CXR_VIEWS]] = None
+        encoder: ENCODER_MODEL = "microsoft/BiomedVLP-CXR-BERT-general",
+        views: Optional[List[CXR_VIEW]] = None,
+        sections: Optional[List[SECTION_NAME]] = None,
     ):
         self.metadata_file_path = metadata_file_path
         self.preproc_path = preproc_path
         self.section_files_path = section_files_path
-        self.views = get_args(CXR_VIEWS) if views is None else views
+        self.views = get_args(CXR_VIEW) if views is None else views
+        self.sections = get_args(SECTION_NAME) if sections is None else sections
 
         merged_section_file_path = os.path.join(self.section_files_path, "mimic_cxr_sectioned.csv")
         reports_df = pd.read_csv(merged_section_file_path)
+        self.df_to_embed_map = {study_id: i for i, study_id in enumerate(reports_df.study.tolist())}
 
-        df = pd.read_csv(self.metadata_file_path)
-        mask = df.ViewPosition.isin(self.views)
-        df = df[mask].reset_index()
-        df.study_id = "s" + df.study_id.astype(str)
+        if "findings" in self.sections or self.sections is None:
+            # TODO: SHA CHECK
+            self.findings_embeddings = read_embedding_file(self.section_files_path, "findings", encoder)
+        if "impression" in self.sections or self.sections is None:
+            # TODO: SHA CHECK
+            self.impression_embeddings = read_embedding_file(self.section_files_path, "impression", encoder)
 
-        df = pd.merge(df, reports_df, how="left", left_on="study_id", right_on="study")
+        metadata_df = pd.read_csv(self.metadata_file_path)
+        metadata_df.study_id = "s" + metadata_df.study_id.astype(str)
+
+        self.df = pd.merge(metadata_df, reports_df, how="inner", left_on="study_id", right_on="study")
+
+        mask = self.df.ViewPosition.isin(self.views)
+        self.df = self.df[mask]
         # mask = ~(df.impression.isna() | df.findings.isna())
-        self.df = df[mask]
 
     def __len__(self):
         return len(self.df)
@@ -69,7 +82,8 @@ class CustomMIMICCXR(Dataset):
         row = self.df.iloc[idx]
         image_path = os.path.join(self.preproc_path, self.df.path_preproc.iloc[idx])
         image = Image.open(image_path)
-        return row, image, row.findings, row.impression
+        embed_idx = self.df_to_embed_map[row.study_id]
+        return image, row.findings, row.impression, self.impression_embeddings[embed_idx], self.findings_embeddings[embed_idx]
 
 
 def _batcher(x):
@@ -81,10 +95,14 @@ def main():
     preproc_path = "/vol/biodata/data/chest_xray/mimic-cxr-jpg-224/data/"
     reports_extracted_path = "/vol/biomedic3/rrr2417/cxr-generation/.tmp/mimic_section_files/"
 
-    dataset = CustomMIMICCXR(metadata_file_path, preproc_path, reports_extracted_path)
-    for x in dataset:
-        print(x)
-        break
+    dataset = CustomMIMICCXR(metadata_file_path, preproc_path, reports_extracted_path, views=["AP"], sections=["impression", "findings"])
+    print(len(dataset))
+    # print(dataset.df.shape)
+    # print(dataset.impression_embeddings.shape)
+    for i, x in enumerate(dataset):
+        if i == 100:
+            print(x[:-2])
+            break
     # dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=15, collate_fn=_batcher)
 
     # for i, x in enumerate(dataloader):

@@ -142,6 +142,35 @@ class Text2ImUNet(UNetModel):
         return h
 
 
+class Text2ImUNetImageLevelCond(UNetModel):
+    
+    def forward(self, x, timesteps, conditioning_x=None):
+        """
+        Apply the model to an input batch.
+
+        :param x: an [N x C x ...] Tensor of inputs.
+        :param timesteps: a 1-D batch of timesteps.
+        :param conditioning_x: an [N x E x ...] Tensor of inputs.
+        :return: an [N x C x ...] Tensor of outputs.
+        """
+        if (conditioning_x is not None):
+            x = th.cat([x, conditioning_x], dim=1)
+
+        hs = []
+        emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+
+        h = x.type(self.dtype)
+        for module in self.input_blocks:
+            h = module(h, emb)
+            hs.append(h)
+        h = self.middle_block(h, emb)
+        for module in self.output_blocks:
+            h = th.cat([h, hs.pop()], dim=1)
+            h = module(h, emb)
+        h = h.type(x.dtype)
+        return self.out(h)
+
+
 class SuperResText2ImUNet(Text2ImUNet):
     """
     A text2im model that performs super-resolution.

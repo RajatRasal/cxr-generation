@@ -9,6 +9,9 @@ from pathlib import Path
 from tqdm import tqdm
 
 
+SECTIONED_OUTPUT_FILENAME = "mimic_cxr_sectioned.csv"
+
+
 def section_text(text):
     """Splits text into sections.
 
@@ -376,31 +379,18 @@ def main(args):
     # write distinct files to facilitate modular processing
     if len(patient_studies) > 0:
         # write out a single CSV with the sections
-        with open(output_path / "mimic_cxr_sectioned.csv", "w") as fp:
+        with open(output_path / SECTIONED_OUTPUT_FILENAME, "w") as fp:
             csvwriter = csv.writer(fp)
             # write header
             csvwriter.writerow(["study", "impression", "findings", "last_paragraph", "comparison"])
             for row in study_sections:
                 csvwriter.writerow(row)
 
-        if args.no_split:
-            # write all the reports out to a single file
-            with open(output_path / f"mimic_cxr_sections.csv", "w") as fp:
-                csvwriter = csv.writer(fp)
-                for row in patient_studies:
-                    csvwriter.writerow(row)
-        else:
-            # write ~22 files with ~10k reports each
-            n = 0
-            jmp = 10000
-
-            while n < len(patient_studies):
-                n_fn = n // jmp
-                with open(output_path / f"mimic_cxr_{n_fn:02d}.csv", "w") as fp:
-                    csvwriter = csv.writer(fp)
-                    for row in patient_studies[n : n + jmp]:
-                        csvwriter.writerow(row)
-                n += jmp
+        # write all the reports out to a single file
+        with open(output_path / f"mimic_cxr_sections.csv", "w") as fp:
+            csvwriter = csv.writer(fp)
+            for row in patient_studies:
+                csvwriter.writerow(row)
 
 
 def cli():
@@ -409,6 +399,5 @@ def cli():
         "--reports_path", required=True, help=("Path to file with radiology reports, e.g. /data/mimic-cxr/files")
     )
     parser.add_argument("--output_path", required=True, help="Path to output CSV files.")
-    parser.add_argument("--no_split", action="store_true", help="Do not output batched CSV files.")
     args = parser.parse_args()
     main(args)

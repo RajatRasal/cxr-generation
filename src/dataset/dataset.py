@@ -1,12 +1,15 @@
 import os
 from dataclasses import dataclass
-from typing import List, Literal, Optional, get_args
+from functools import partial
+from typing import List, Literal, Optional, TypedDict, get_args
 from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
-from torch.utils.data import Dataset
+from torchvision.io import read_image
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from dataset.embed_reports import ENCODER_MODEL, SECTION_NAME, read_embedding_file
@@ -29,10 +32,20 @@ def get_metadata(splits_path: str, out_path: str):
     df.to_csv(os.path.join(out_path, "metadata.csv"))
 
 
-@dataclass
-class MIMICCXRReport:
-    findings: Optional[str]
-    impressions: Optional[str]
+class MIMICCXRData(TypedDict):
+    image: torch.FloatTensor
+    findings: str
+    impression: str
+    findings_embedding: torch.FloatTensor
+    impression_embedding: torch.FloatTensor
+
+
+class MIMICCXRBatch(TypedDict):
+    image_batch: torch.FloatTensor
+    findings_batch: List[str]
+    impression_batch: List[str]
+    findings_embedding_batch: torch.FloatTensor
+    impression_embedding_batch: torch.FloatTensor
 
 
 CXR_VIEW = Literal["AP", "PA"]
@@ -78,16 +91,31 @@ class CustomMIMICCXR(Dataset):
     def __len__(self):
         return len(self.df)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> MIMICCXRData:
         row = self.df.iloc[idx]
         image_path = os.path.join(self.preproc_path, self.df.path_preproc.iloc[idx])
-        image = Image.open(image_path)
+        image = read_image(image_path)
         embed_idx = self.df_to_embed_map[row.study_id]
-        return image, row.findings, row.impression, self.impression_embeddings[embed_idx], self.findings_embeddings[embed_idx]
+        return {
+            "image": image,
+            "findings": row.findings,
+            "impression": row.impression,
+            "findings_embedding": torch.tensor(self.impression_embeddings[embed_idx]).unsqueeze(0),
+            "impression_embedding": torch.tensor(self.findings_embeddings[embed_idx]).unsqueeze(0),
+        }
 
 
-def _batcher(x):
-    return x
+def mimic_cxr_batcher(items: List[MIMICCXRData]) -> MIMICCXRBatch:
+    return {
+        "image_batch": torch.cat([item["image"] for item in items]),
+        "findings_batch": [item["findings"] for item in items],
+        "impression_batch": [item["impression"] for item in items],
+        "findings_embedding_batch": torch.cat([item["findings_embedding"] for item in items]),
+        "impression_embedding_batch": torch.cat([item["impression_embedding"] for item in items]),
+    }
+
+
+CustomMIMICCXRDataLoader = partial(DataLoader, collate_fn=mimic_cxr_batcher)
 
 
 def main():
@@ -95,16 +123,20 @@ def main():
     preproc_path = "/vol/biodata/data/chest_xray/mimic-cxr-jpg-224/data/"
     reports_extracted_path = "/vol/biomedic3/rrr2417/cxr-generation/.tmp/mimic_section_files/"
 
-    dataset = CustomMIMICCXR(metadata_file_path, preproc_path, reports_extracted_path, views=["AP"], sections=["impression", "findings"])
-    print(len(dataset))
-    # print(dataset.df.shape)
-    # print(dataset.impression_embeddings.shape)
-    for i, x in enumerate(dataset):
-        if i == 100:
-            print(x[:-2])
-            break
-    # dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=15, collate_fn=_batcher)
+    dataset = CustomMIMICCXR(
+        metadata_file_path,
+        preproc_path,
+        reports_extracted_path,
+        views=["AP"],
+        sections=["impression", "findings"],
+    )
 
-    # for i, x in enumerate(dataloader):
-    #     if i % 10 == 0:
-    #         print(i)
+    dataloader = CustomMIMICCXRDataLoader(dataset, batch_size=3, shuffle=True, num_workers=15)
+    for x in dataloader:
+        print(x["image_batch"].shape)
+        print(len(x["findings_batch"]))
+        print(len(x["impression_batch"]))
+        print(x["findings_embedding_batch"].shape)
+        print(x["impression_embedding_batch"].shape)
+        break
+

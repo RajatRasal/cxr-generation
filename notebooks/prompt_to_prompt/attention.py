@@ -1,6 +1,8 @@
 import abc
 from typing import Dict, Union, Optional, Tuple, List
 
+import torch
+
 from .local_blend import LocalBlend
 
 
@@ -186,7 +188,7 @@ def get_equalizer(text: str, word_select: Union[int, Tuple[int, ...]], values: U
     return equalizer
 
 
-def aggregate_attention(attention_store: AttentionStore, res: int, from_where: List[str], is_cross: bool, select: int):
+def aggregate_attention(attention_store: AttentionStore, prompts: List[str], res: int, from_where: List[str], is_cross: bool, select: int):
     out = []
     attention_maps = attention_store.get_average_attention()
     num_pixels = res ** 2

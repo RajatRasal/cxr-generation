@@ -2,8 +2,11 @@ import abc
 from typing import Dict, Union, Optional, Tuple, List
 
 import torch
+from transformers import PreTrainedTokenizer
 
 from .local_blend import LocalBlend
+from .ptp_utils import get_time_words_attention_alpha, get_word_inds
+from .seq_aligner import get_replacement_mapper, get_refinement_mapper
 
 
 class AttentionControl(abc.ABC):
@@ -91,6 +94,18 @@ class AttentionStore(AttentionControl):
 
         
 class AttentionControlEdit(AttentionStore, abc.ABC):
+
+    def __init__(self, tokenizer: PreTrainedTokenizer, prompts: List[str], num_steps: int,
+                 cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
+                 self_replace_steps: Union[float, Tuple[float, float]], device: torch.device,
+                 local_blend: Optional[LocalBlend] = None, **kwargs):
+        super(AttentionControlEdit, self).__init__(**kwargs)
+        self.batch_size = len(prompts)
+        self.cross_replace_alpha = get_time_words_attention_alpha(prompts, num_steps, cross_replace_steps, tokenizer).to(device)
+        if type(self_replace_steps) is float:
+            self_replace_steps = 0, self_replace_steps
+        self.num_self_replace = int(num_steps * self_replace_steps[0]), int(num_steps * self_replace_steps[1])
+        self.local_blend = local_blend
     
     def step_callback(self, x_t):
         if self.local_blend is not None:
@@ -122,43 +137,29 @@ class AttentionControlEdit(AttentionStore, abc.ABC):
             attn = attn.reshape(self.batch_size * h, *attn.shape[2:])
         return attn
     
-    def __init__(self, prompts, num_steps: int,
-                 cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
-                 self_replace_steps: Union[float, Tuple[float, float]],
-                 local_blend: Optional[LocalBlend]):
-        super(AttentionControlEdit, self).__init__()
-        self.batch_size = len(prompts)
-        self.cross_replace_alpha = ptp_utils.get_time_words_attention_alpha(prompts, num_steps, cross_replace_steps, tokenizer).to(device)
-        if type(self_replace_steps) is float:
-            self_replace_steps = 0, self_replace_steps
-        self.num_self_replace = int(num_steps * self_replace_steps[0]), int(num_steps * self_replace_steps[1])
-        self.local_blend = local_blend
-
 
 class AttentionReplace(AttentionControlEdit):
 
+    def __init__(self, tokenizer: PreTrainedTokenizer, prompts: List[str], num_steps: int, cross_replace_steps: float, self_replace_steps: float, device: torch.device, *args, **kwargs):
+        super(AttentionReplace, self).__init__(tokenizer, prompts, num_steps, cross_replace_steps, self_replace_steps, device, *args, **kwargs)
+        self.mapper = get_replacement_mapper(prompts, tokenizer).to(device)
+
     def replace_cross_attention(self, attn_base, att_replace):
-        return torch.einsum('hpw,bwn->bhpn', attn_base, self.mapper)
-      
-    def __init__(self, prompts, num_steps: int, cross_replace_steps: float, self_replace_steps: float,
-                 local_blend: Optional[LocalBlend] = None):
-        super(AttentionReplace, self).__init__(prompts, num_steps, cross_replace_steps, self_replace_steps, local_blend)
-        self.mapper = seq_aligner.get_replacement_mapper(prompts, tokenizer).to(device)
-        
+        return torch.einsum("hpw, bwn->bhpn", attn_base, self.mapper)
+
 
 class AttentionRefine(AttentionControlEdit):
+
+    def __init__(self, tokenizer: PreTrainedTokenizer, prompts: List[str], num_steps: int, cross_replace_steps: float, self_replace_steps: float, device: torch.device, *args, **kwargs):
+        super(AttentionRefine, self).__init__(tokenizer, prompts, num_steps, cross_replace_steps, self_replace_steps, device, *args, **kwargs)
+        self.mapper, alphas = get_refinement_mapper(prompts, tokenizer)
+        self.mapper, alphas = self.mapper.to(device), alphas.to(device)
+        self.alphas = alphas.reshape(alphas.shape[0], 1, 1, alphas.shape[1])
 
     def replace_cross_attention(self, attn_base, att_replace):
         attn_base_replace = attn_base[:, :, self.mapper].permute(2, 0, 1, 3)
         attn_replace = attn_base_replace * self.alphas + att_replace * (1 - self.alphas)
         return attn_replace
-
-    def __init__(self, prompts, num_steps: int, cross_replace_steps: float, self_replace_steps: float,
-                 local_blend: Optional[LocalBlend] = None):
-        super(AttentionRefine, self).__init__(prompts, num_steps, cross_replace_steps, self_replace_steps, local_blend)
-        self.mapper, alphas = seq_aligner.get_refinement_mapper(prompts, tokenizer)
-        self.mapper, alphas = self.mapper.to(device), alphas.to(device)
-        self.alphas = alphas.reshape(alphas.shape[0], 1, 1, alphas.shape[1])
 
 
 class AttentionReweight(AttentionControlEdit):
@@ -183,7 +184,7 @@ def get_equalizer(text: str, word_select: Union[int, Tuple[int, ...]], values: U
     equalizer = torch.ones(len(values), 77)
     values = torch.tensor(values, dtype=torch.float32)
     for word in word_select:
-        inds = ptp_utils.get_word_inds(text, word, tokenizer)
+        inds = get_word_inds(text, word, tokenizer)
         equalizer[:, inds] = values
     return equalizer
 

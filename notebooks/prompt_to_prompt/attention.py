@@ -9,7 +9,7 @@ from .ptp_utils import get_time_words_attention_alpha, get_word_inds
 from .seq_aligner import get_replacement_mapper, get_refinement_mapper
 
 
-class AttentionControl(abc.ABC):
+class AttentionController(abc.ABC):
 
     def __init__(self, low_resource: bool = False):
         self.cur_step = 0
@@ -28,10 +28,10 @@ class AttentionControl(abc.ABC):
         return self.num_att_layers if self.low_resource else 0
     
     @abc.abstractmethod
-    def forward (self, attn, is_cross: bool, place_in_unet: str):
+    def forward(self, attn: torch.Tensor, is_cross: bool, place_in_unet: str) -> torch.Tensor:
         raise NotImplementedError
 
-    def __call__(self, attn, is_cross: bool, place_in_unet: str):
+    def __call__(self, attn: torch.Tensor, is_cross: bool, place_in_unet: str) -> torch.Tensor:
         if self.cur_att_layer >= self.num_uncond_att_layers:
             if self.low_resource:
                 attn = self.forward(attn, is_cross, place_in_unet)
@@ -50,13 +50,13 @@ class AttentionControl(abc.ABC):
         self.cur_att_layer = 0
 
 
-class EmptyControl(AttentionControl):
+class EmptyController(AttentionController):
     
-    def forward (self, attn, is_cross: bool, place_in_unet: str):
+    def forward(self, attn: torch.Tensor, is_cross: bool, place_in_unet: str) -> torch.Tensor:
         return attn
     
     
-class AttentionStore(AttentionControl):
+class AttentionStore(AttentionController):
 
     def __init__(self, *args, **kwargs):
         super(AttentionStore, self).__init__(*args, **kwargs)
@@ -65,10 +65,16 @@ class AttentionStore(AttentionControl):
 
     @staticmethod
     def get_empty_store():
-        return {"down_cross": [], "mid_cross": [], "up_cross": [],
-                "down_self": [],  "mid_self": [],  "up_self": []}
+        return {
+            "down_cross": [],
+            "mid_cross": [],
+            "up_cross": [],
+            "down_self": [],
+            "mid_self": [],
+            "up_self": []
+        }
 
-    def forward(self, attn, is_cross: bool, place_in_unet: str):
+    def forward(self, attn: torch.Tensor, is_cross: bool, place_in_unet: str) -> torch.Tensor:
         key = f"{place_in_unet}_{'cross' if is_cross else 'self'}"
         if attn.shape[1] <= 32 ** 2:  # avoid memory overhead
             self.step_store[key].append(attn)
@@ -93,13 +99,21 @@ class AttentionStore(AttentionControl):
         self.attention_store = {}
 
         
-class AttentionControlEdit(AttentionStore, abc.ABC):
+class AttentionControllerEdit(AttentionStore, abc.ABC):
 
-    def __init__(self, tokenizer: PreTrainedTokenizer, prompts: List[str], num_steps: int,
-                 cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
-                 self_replace_steps: Union[float, Tuple[float, float]], device: torch.device,
-                 local_blend: Optional[LocalBlend] = None, **kwargs):
-        super(AttentionControlEdit, self).__init__(**kwargs)
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        prompts: List[str],
+        num_steps: int,
+        cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
+        self_replace_steps: Union[float, Tuple[float, float]],
+        device: torch.device = None,
+        local_blend: Optional[LocalBlend] = None,
+        *args,
+        **kwargs,
+    ):
+        super(AttentionControllerEdit, self).__init__(*args, **kwargs)
         self.batch_size = len(prompts)
         self.cross_replace_alpha = get_time_words_attention_alpha(prompts, num_steps, cross_replace_steps, tokenizer).to(device)
         if type(self_replace_steps) is float:
@@ -122,39 +136,81 @@ class AttentionControlEdit(AttentionStore, abc.ABC):
     def replace_cross_attention(self, attn_base, att_replace):
         raise NotImplementedError
     
-    def forward(self, attn, is_cross: bool, place_in_unet: str):
-        super(AttentionControlEdit, self).forward(attn, is_cross, place_in_unet)
+    def forward(self, attn: torch.Tensor, is_cross: bool, place_in_unet: str) -> torch.Tensor:
+        super(AttentionControllerEdit, self).forward(attn, is_cross, place_in_unet)
         if is_cross or (self.num_self_replace[0] <= self.cur_step < self.num_self_replace[1]):
             h = attn.shape[0] // (self.batch_size)
             attn = attn.reshape(self.batch_size, h, *attn.shape[1:])
-            attn_base, attn_repalce = attn[0], attn[1:]
+            attn_base, attn_replace = attn[0], attn[1:]
             if is_cross:
                 alpha_words = self.cross_replace_alpha[self.cur_step]
-                attn_repalce_new = self.replace_cross_attention(attn_base, attn_repalce) * alpha_words + (1 - alpha_words) * attn_repalce
-                attn[1:] = attn_repalce_new
+                attn_replace_new = self.replace_cross_attention(attn_base, attn_replace) * alpha_words + (1 - alpha_words) * attn_replace
+                attn[1:] = attn_replace_new
             else:
-                attn[1:] = self.replace_self_attention(attn_base, attn_repalce)
+                attn[1:] = self.replace_self_attention(attn_base, attn_replace)
             attn = attn.reshape(self.batch_size * h, *attn.shape[2:])
         return attn
     
 
-class AttentionReplace(AttentionControlEdit):
+class AttentionReplace(AttentionControllerEdit):
 
-    def __init__(self, tokenizer: PreTrainedTokenizer, prompts: List[str], num_steps: int, cross_replace_steps: float, self_replace_steps: float, device: torch.device, *args, **kwargs):
-        super(AttentionReplace, self).__init__(tokenizer, prompts, num_steps, cross_replace_steps, self_replace_steps, device, *args, **kwargs)
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        prompts: List[str],
+        num_steps: int,
+        cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
+        self_replace_steps: Union[float, Tuple[float, float]],
+        device: torch.device = None,
+        local_blend: Optional[LocalBlend] = None,
+        *args,
+        **kwargs,
+    ):
+        super(AttentionReplace, self).__init__(
+            tokenizer,
+            prompts,
+            num_steps,
+            cross_replace_steps,
+            self_replace_steps,
+            device,
+            local_blend,
+            *args,
+            **kwargs,
+        )
         self.mapper = get_replacement_mapper(prompts, tokenizer).to(device)
 
     def replace_cross_attention(self, attn_base, att_replace):
         return torch.einsum("hpw, bwn->bhpn", attn_base, self.mapper)
 
 
-class AttentionRefine(AttentionControlEdit):
+class AttentionRefine(AttentionControllerEdit):
 
-    def __init__(self, tokenizer: PreTrainedTokenizer, prompts: List[str], num_steps: int, cross_replace_steps: float, self_replace_steps: float, device: torch.device, *args, **kwargs):
-        super(AttentionRefine, self).__init__(tokenizer, prompts, num_steps, cross_replace_steps, self_replace_steps, device, *args, **kwargs)
-        self.mapper, alphas = get_refinement_mapper(prompts, tokenizer)
-        self.mapper, alphas = self.mapper.to(device), alphas.to(device)
-        self.alphas = alphas.reshape(alphas.shape[0], 1, 1, alphas.shape[1])
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        prompts: List[str],
+        num_steps: int,
+        cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
+        self_replace_steps: Union[float, Tuple[float, float]],
+        device: torch.device = None,
+        local_blend: Optional[LocalBlend] = None,
+        *args,
+        **kwargs,
+    ):
+        super(AttentionRefine, self).__init__(
+            tokenizer,
+            prompts,
+            num_steps,
+            cross_replace_steps,
+            self_replace_steps,
+            device,
+            local_blend,
+            *args,
+            **kwargs,
+        )
+        mapper, alphas = get_refinement_mapper(prompts, tokenizer)
+        self.mapper = mapper.to(device)
+        self.alphas = alphas.reshape(alphas.shape[0], 1, 1, alphas.shape[1]).to(device)
 
     def replace_cross_attention(self, attn_base, att_replace):
         attn_base_replace = attn_base[:, :, self.mapper].permute(2, 0, 1, 3)
@@ -162,7 +218,35 @@ class AttentionRefine(AttentionControlEdit):
         return attn_replace
 
 
-class AttentionReweight(AttentionControlEdit):
+class AttentionReweight(AttentionControllerEdit):
+
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        prompts: List[str],
+        num_steps: int,
+        cross_replace_steps: Union[float, Tuple[float, float], Dict[str, Tuple[float, float]]],
+        self_replace_steps: Union[float, Tuple[float, float]],
+        equalizer: torch.Tensor,
+        prev_controller: Optional[AttentionControllerEdit] = None,
+        device: torch.device = None,
+        local_blend: Optional[LocalBlend] = None,
+        *args,
+        **kwargs,
+    ):
+        super(AttentionReweight, self).__init__(
+            tokenizer,
+            prompts,
+            num_steps,
+            cross_replace_steps,
+            self_replace_steps,
+            device,
+            local_blend,
+            *args,
+            **kwargs,
+        )
+        self.equalizer = equalizer.to(device)
+        self.prev_controller = prev_controller
 
     def replace_cross_attention(self, attn_base, att_replace):
         if self.prev_controller is not None:
@@ -170,15 +254,13 @@ class AttentionReweight(AttentionControlEdit):
         attn_replace = attn_base[None, :, :, :] * self.equalizer[:, None, None, :]
         return attn_replace
 
-    def __init__(self, prompts, num_steps: int, cross_replace_steps: float, self_replace_steps: float, equalizer,
-                local_blend: Optional[LocalBlend] = None, controller: Optional[AttentionControlEdit] = None):
-        super(AttentionReweight, self).__init__(prompts, num_steps, cross_replace_steps, self_replace_steps, local_blend)
-        self.equalizer = equalizer.to(device)
-        self.prev_controller = controller
 
-
-def get_equalizer(text: str, word_select: Union[int, Tuple[int, ...]], values: Union[List[float],
-                  Tuple[float, ...]]):
+def get_equalizer(
+    tokenizer: PreTrainedTokenizer,
+    text: str,
+    word_select: Union[int, Tuple[int, ...]],
+    values: Union[List[float], Tuple[float, ...]]
+) -> torch.Tensor:
     if type(word_select) is int or type(word_select) is str:
         word_select = (word_select,)
     equalizer = torch.ones(len(values), 77)
@@ -189,7 +271,14 @@ def get_equalizer(text: str, word_select: Union[int, Tuple[int, ...]], values: U
     return equalizer
 
 
-def aggregate_attention(attention_store: AttentionStore, prompts: List[str], res: int, from_where: List[str], is_cross: bool, select: int):
+def aggregate_attention(
+    attention_store: AttentionStore,
+    prompts: List[str],
+    res: int,
+    from_where: List[str],
+    is_cross: bool,
+    select: int,
+) -> torch.Tensor:
     out = []
     attention_maps = attention_store.get_average_attention()
     num_pixels = res ** 2

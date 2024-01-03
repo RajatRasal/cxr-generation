@@ -46,10 +46,10 @@ def latent2image(vae, latents):
 def init_latent(latent, model, height, width, generator, batch_size):
     if latent is None:
         latent = torch.randn(
-            (1, model.unet.in_channels, height // 8, width // 8),
+            (1, model.unet.config.in_channels, height // 8, width // 8),
             generator=generator,
         )
-    latents = latent.expand(batch_size,  model.unet.in_channels, height // 8, width // 8).to(model.device)
+    latents = latent.expand(batch_size,  model.unet.config.in_channels, height // 8, width // 8).to(model.device)
     return latent, latents
 
 
@@ -189,10 +189,13 @@ def register_attention_control(model, controller):
     cross_att_count = 0
     sub_nets = model.unet.named_children()
     for net in sub_nets:
+        # if "down_blocks" in net[0]:
         if "down" in net[0]:
             cross_att_count += register_recr(net[1], 0, "down")
+        # elif "up_blocks" in net[0]:
         elif "up" in net[0]:
             cross_att_count += register_recr(net[1], 0, "up")
+        # elif "mid_block" in net[0]:
         elif "mid" in net[0]:
             cross_att_count += register_recr(net[1], 0, "mid")
 

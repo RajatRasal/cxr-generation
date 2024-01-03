@@ -52,7 +52,9 @@ def view_images(images: Union[List[Image.Image], np.ndarray], num_rows=1, offset
 def show_cross_attention(attention_store: AttentionStore, tokenizer: PreTrainedTokenizer, prompts: List[str], res: int, from_where: List[str], select: int = 0):
     tokens = tokenizer.encode(prompts[select])
     decoder = tokenizer.decode
-    attention_maps = aggregate_attention(attention_store, prompts, res, from_where, True, select)
+    attention_maps = aggregate_attention(
+        attention_store, prompts, res, from_where, True, select,
+    )
     images = []
     for i in range(len(tokens)):
         image = attention_maps[:, :, i]

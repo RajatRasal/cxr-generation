@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Tuple, Union
 
 import numpy as np
 import torch
@@ -12,7 +12,10 @@ from .ptp_utils import register_attention_control
 
 
 def _load_512(image_path: str, left=0, right=0, top=0, bottom=0):
-    image = np.array(Image.open(image_path))
+    if type(image_path) is str:
+        image = np.array(Image.open(image_path))[:, :, :3]
+    else:
+        image = image_path
 
     # If image is grayscale
     if image.ndim == 2:
@@ -206,7 +209,15 @@ class NullTextInversion:
         bar.close()
         return uncond_embeddings_list
     
-    def invert(self, image_path: str, prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
+    def invert(
+        self,
+        image_path: str,
+        prompt: str,
+        offsets: Tuple[int, int, int, int] = (0, 0, 0, 0),
+        num_inner_steps: int = 10,
+        early_stop_epsilon: float = 1e-5,
+        verbose = False,
+    ):
         self.init_prompt(prompt)
         register_attention_control(self.model, None)
         image_gt = _load_512(image_path, *offsets)
@@ -216,4 +227,4 @@ class NullTextInversion:
         if verbose:
             print("Null-text optimization...")
         uncond_embeddings = self.null_optimization(ddim_latents, num_inner_steps, early_stop_epsilon)
-        return (image_gt, image_rec), ddim_latents[-1], uncond_embeddings
+        return (image_gt, image_rec), ddim_latents, uncond_embeddings

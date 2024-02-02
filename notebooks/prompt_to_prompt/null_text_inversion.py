@@ -8,40 +8,7 @@ from diffusers import StableDiffusionPipeline, DDIMScheduler
 from torch.optim import Adam
 from tqdm import tqdm
 
-from .ptp_utils import register_attention_control
-
-
-def _load_512(image_path: str, left=0, right=0, top=0, bottom=0):
-    if type(image_path) is str:
-        image = np.array(Image.open(image_path))[:, :, :3]
-    else:
-        image = image_path
-
-    # If image is grayscale
-    if image.ndim == 2:
-        arr = np.empty((*image.shape, 3), dtype=np.uint8)
-        arr[:, :, 0] = image.copy()
-        arr[:, :, 1] = image.copy()
-        arr[:, :, 2] = image.copy()
-        image = arr
-
-    h, w, _ = image.shape
-    left = min(left, w - 1)
-    right = min(right, w - left - 1)
-    top = min(top, h - left - 1)
-    bottom = min(bottom, h - top - 1)
-    image = image[top:h - bottom, left:w - right]
-
-    h, w, _ = image.shape
-    if h < w:
-        offset = (w - h) // 2
-        image = image[:, offset:offset + h]
-    elif w < h:
-        offset = (h - w) // 2
-        image = image[offset:offset + w]
-
-    image = np.array(Image.fromarray(image).resize((512, 512)))
-    return image
+from .ptp_utils import register_attention_control, load_512
 
 
 class NullTextInversion:
@@ -220,7 +187,7 @@ class NullTextInversion:
     ):
         self.init_prompt(prompt)
         register_attention_control(self.model, None)
-        image_gt = _load_512(image_path, *offsets)
+        image_gt = load_512(image_path, *offsets)
         if verbose:
             print("DDIM inversion...")
         image_rec, ddim_latents = self.ddim_inversion(image_gt)

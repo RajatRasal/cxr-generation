@@ -20,6 +20,39 @@ from typing import Optional, Union, Tuple, List, Callable, Dict
 from tqdm.notebook import tqdm
 
 
+def load_512(image_path: str, left=0, right=0, top=0, bottom=0):
+    if type(image_path) is str:
+        image = np.array(Image.open(image_path))[:, :, :3]
+    else:
+        image = image_path
+
+    # If image is grayscale
+    if image.ndim == 2:
+        arr = np.empty((*image.shape, 3), dtype=np.uint8)
+        arr[:, :, 0] = image.copy()
+        arr[:, :, 1] = image.copy()
+        arr[:, :, 2] = image.copy()
+        image = arr
+
+    h, w, _ = image.shape
+    left = min(left, w - 1)
+    right = min(right, w - left - 1)
+    top = min(top, h - left - 1)
+    bottom = min(bottom, h - top - 1)
+    image = image[top:h - bottom, left:w - right]
+
+    h, w, _ = image.shape
+    if h < w:
+        offset = (w - h) // 2
+        image = image[:, offset:offset + h]
+    elif w < h:
+        offset = (h - w) // 2
+        image = image[offset:offset + w]
+
+    image = np.array(Image.fromarray(image).resize((512, 512)))
+    return image
+
+
 def diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource=False):
     if low_resource:
         noise_pred_uncond = model.unet(latents, t, encoder_hidden_states=context[0])["sample"]
@@ -32,6 +65,83 @@ def diffusion_step(model, controller, latents, context, t, guidance_scale, low_r
     latents = model.scheduler.step(noise_pred, t, latents)["prev_sample"]
     latents = controller.step_callback(latents)
     return latents
+
+
+def get_timesteps(scheduler, num_inference_steps, strength, device):
+    # get the original timestep using init_timestep
+    init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
+
+    t_start = max(num_inference_steps - init_timestep, 0)
+    timesteps = scheduler.timesteps[t_start * scheduler.order :]
+
+    return timesteps, num_inference_steps - t_start
+    
+
+@torch.no_grad()
+def generate_mask(
+    model,
+    image,
+    source_prompt,
+    target_prompt,
+    num_maps_per_mask,
+    device,
+    num_inference_steps,
+    guidance_scale,
+    generator,
+    mask_thresholding_ratio=3.0,
+):
+    scheduler = model.scheduler
+    
+    # Encode prompt num_map_per_mask times
+    target_negative_prompt_embeds, target_prompt_embeds = model.encode_prompt(target_prompt, device, num_maps_per_mask, True)
+    target_prompt_embeds = torch.cat([target_negative_prompt_embeds, target_prompt_embeds])
+    source_negative_prompt_embeds, source_prompt_embeds = model.encode_prompt(source_prompt, device, num_maps_per_mask, True)
+    source_prompt_embeds = torch.cat([source_negative_prompt_embeds, source_prompt_embeds])
+    
+    # Preprocess image and repeat num_map_per_mask times
+    image = torch.from_numpy(image).float() / 127.5 - 1
+    image = image.permute(2, 0, 1).unsqueeze(0).to(device)
+    latents = model.vae.encode(image)['latent_dist'].mean
+    latents = latents * 0.18215
+    
+    # Set timesteps
+    scheduler.set_timesteps(num_inference_steps, device=device)
+    timesteps, _ = get_timesteps(scheduler, num_inference_steps, 0.5, device)
+    encode_timestep = timesteps[0]
+    
+    # Prepare image latents
+    image_latents = torch.cat([latents] * num_maps_per_mask, dim=0)
+    noise = torch.randn(image_latents.shape, generator=generator, device=device, dtype=model.vae.dtype)
+    image_latents = scheduler.add_noise(image_latents, noise, encode_timestep)
+
+    latent_model_input = torch.cat([image_latents] * 4)
+    latent_model_input = scheduler.scale_model_input(latent_model_input, encode_timestep)
+    
+    # Predict residual noise
+    prompt_embeds = torch.cat([source_prompt_embeds, target_prompt_embeds])
+    noise_pred = model.unet(
+        latent_model_input,
+        encode_timestep,
+        encoder_hidden_states=prompt_embeds,
+    )["sample"]
+    
+    # CFG
+    noise_pred_neg_src, noise_pred_source, noise_pred_uncond, noise_pred_target = noise_pred.chunk(4)
+    noise_pred_source = noise_pred_neg_src + guidance_scale * (noise_pred_source - noise_pred_neg_src)
+    noise_pred_target = noise_pred_uncond + guidance_scale * (noise_pred_target - noise_pred_uncond)    
+    
+    # Compute mask from absolute (l1) difference between noise residuals
+    mask_guidance_map = (
+        torch.abs(noise_pred_target - noise_pred_source)
+        .reshape(1, num_maps_per_mask, *noise_pred_target.shape[-3:])
+        .mean([1, 2])
+    )
+    clamp_magnitude = mask_guidance_map.mean() * mask_thresholding_ratio
+    semantic_mask_image = mask_guidance_map.clamp(0, clamp_magnitude) / clamp_magnitude
+    semantic_mask_image = torch.where(semantic_mask_image <= 0.5, 0, 1)
+    mask_image = semantic_mask_image.cpu().numpy()
+    
+    return mask_image
 
 
 def latent2image(vae, latents):

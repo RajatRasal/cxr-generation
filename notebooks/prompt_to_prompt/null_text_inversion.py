@@ -145,6 +145,7 @@ class NullTextInversion:
     def null_optimization(self, latents, num_inner_steps, epsilon):
         uncond_embeddings, cond_embeddings = self.context.chunk(2)
         uncond_embeddings_list = []
+        cond_embeddings_list = []
         latent_cur = latents[-1]
         bar = tqdm(total=num_inner_steps * self.ddim_steps)
         for i in range(self.ddim_steps):
@@ -170,11 +171,48 @@ class NullTextInversion:
             for j in range(j + 1, num_inner_steps):
                 bar.update()
             uncond_embeddings_list.append(uncond_embeddings[:1].detach())
+            cond_embeddings_list.append(cond_embeddings[:1].detach())
             with torch.no_grad():
                 context = torch.cat([uncond_embeddings, cond_embeddings])
                 latent_cur = self.get_noise_pred(latent_cur, t, False, context)
         bar.close()
-        return uncond_embeddings_list
+        return uncond_embeddings_list, cond_embeddings_list
+
+    def prompt_optimization(self, latents, num_inner_steps, epsilon):
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        uncond_embeddings_list = []
+        cond_embeddings_list = []
+        latent_cur = latents[-1]
+        bar = tqdm(total=num_inner_steps * self.ddim_steps)
+        for i in range(self.ddim_steps):
+            cond_embeddings = cond_embeddings.clone().detach()
+            cond_embeddings.requires_grad = True
+            optimizer = Adam([cond_embeddings], lr=1e-2 * (1. - i / 100.))
+            latent_prev = latents[len(latents) - i - 2]
+            t = self.model.scheduler.timesteps[i]
+            with torch.no_grad():
+                noise_pred_uncond = self.get_noise_pred_single(latent_cur, t, uncond_embeddings)
+            for j in range(num_inner_steps):
+                noise_pred_cond = self.get_noise_pred_single(latent_cur, t, cond_embeddings)
+                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec = self.prev_step(noise_pred, t, latent_cur)
+                loss = F.mse_loss(latents_prev_rec, latent_prev)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                loss_item = loss.item()
+                bar.update()
+                if loss_item < epsilon + i * 2e-5:
+                    break
+            for j in range(j + 1, num_inner_steps):
+                bar.update()
+            uncond_embeddings_list.append(uncond_embeddings[:1].detach())
+            cond_embeddings_list.append(cond_embeddings[:1].detach())
+            with torch.no_grad():
+                context = torch.cat([uncond_embeddings, cond_embeddings])
+                latent_cur = self.get_noise_pred(latent_cur, t, False, context)
+        bar.close()
+        return uncond_embeddings_list, cond_embeddings_list
     
     def invert(
         self,
@@ -183,6 +221,7 @@ class NullTextInversion:
         offsets: Tuple[int, int, int, int] = (0, 0, 0, 0),
         num_inner_steps: int = 10,
         early_stop_epsilon: float = 1e-5,
+        tune_prompts: bool = False,
         verbose = False,
     ):
         self.init_prompt(prompt)
@@ -191,7 +230,12 @@ class NullTextInversion:
         if verbose:
             print("DDIM inversion...")
         image_rec, ddim_latents = self.ddim_inversion(image_gt)
-        if verbose:
-            print("Null-text optimization...")
-        uncond_embeddings = self.null_optimization(ddim_latents, num_inner_steps, early_stop_epsilon)
-        return (image_gt, image_rec), ddim_latents, uncond_embeddings
+        if tune_prompts:
+            if verbose:
+                print("Prompt tuning...")
+            uncond_embeddings, cond_embeddings = self.prompt_optimization(ddim_latents, num_inner_steps, early_stop_epsilon)
+        else:
+            if verbose:
+                print("Null-text optimization...")
+            uncond_embeddings, cond_embeddings = self.null_optimization(ddim_latents, num_inner_steps, early_stop_epsilon)
+        return (image_gt, image_rec), ddim_latents, uncond_embeddings, cond_embeddings

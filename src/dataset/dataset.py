@@ -100,22 +100,24 @@ class CustomMIMICCXR(Dataset):
             "image": image,
             "findings": row.findings,
             "impression": row.impression,
-            "findings_embedding": torch.tensor(self.impression_embeddings[embed_idx]).unsqueeze(0),
-            "impression_embedding": torch.tensor(self.findings_embeddings[embed_idx]).unsqueeze(0),
+            "findings_embedding": torch.tensor(self.impression_embeddings[embed_idx]).unsqueeze(0) if hasattr(self, impression_embeddings) else None,
+            "impression_embedding": torch.tensor(self.findings_embeddings[embed_idx]).unsqueeze(0) if hasattr(self, findings_embeddings) else None,
         }
 
 
-def mimic_cxr_batcher(items: List[MIMICCXRData]) -> MIMICCXRBatch:
+def _mimic_cxr_batcher(items: List[MIMICCXRData]) -> MIMICCXRBatch:
+    findings_embeddings = [item["findings_embedding"] for item in items]
+    impression_embeddings = [item["impression_embedding"] for item in items]
     return {
         "image_batch": torch.cat([item["image"] for item in items]),
         "findings_batch": [item["findings"] for item in items],
         "impression_batch": [item["impression"] for item in items],
-        "findings_embedding_batch": torch.cat([item["findings_embedding"] for item in items]),
-        "impression_embedding_batch": torch.cat([item["impression_embedding"] for item in items]),
+        "findings_embedding_batch": None if all([e is None for e in findings_embeddings]) else torch.cat(findings_embeddings),
+        "impression_embedding_batch": None if all([e is None for e in impression_embeddings]) else torch.cat(impression_embeddings),
     }
 
 
-CustomMIMICCXRDataLoader = partial(DataLoader, collate_fn=mimic_cxr_batcher)
+CustomMIMICCXRDataLoader = partial(DataLoader, collate_fn=_mimic_cxr_batcher)
 
 
 def main():
@@ -128,7 +130,7 @@ def main():
         preproc_path,
         reports_extracted_path,
         views=["AP"],
-        sections=["impression", "findings"],
+        sections=["impression"],  # , "findings"],
     )
 
     dataloader = CustomMIMICCXRDataLoader(dataset, batch_size=3, shuffle=True, num_workers=15)

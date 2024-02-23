@@ -7,7 +7,7 @@ from PIL import Image
 from diffusers import StableDiffusionPipeline
 
 from semantic_editing.diffusion import StableDiffusionAdapter
-from semantic_editing.null_text_inversion import CFGWithDDIM, NullTokenOptimisation
+from semantic_editing.null_text_inversion import CFGWithDDIM, NullTokenOptimisation, PromptTokenOptimisation
 from semantic_editing.utils import seed_everything
 
 
@@ -48,6 +48,11 @@ def image_prompt():
 @pytest.fixture
 def nti(sd_adapter):
     return NullTokenOptimisation(sd_adapter, guidance_scale=7.5, num_inner_steps=20)
+
+
+@pytest.fixture
+def pti(sd_adapter):
+    return PromptTokenOptimisation(sd_adapter, guidance_scale=7.5, num_inner_steps=20)
 
 
 @pytest.fixture

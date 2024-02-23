@@ -99,6 +99,22 @@ class StableDiffusionAdapter:
 
 
 @torch.no_grad()
+def classifier_free_guidance_step(
+     model: StableDiffusionAdapter,
+     latent: torch.FloatTensor,
+     prompt_embedding: torch.FloatTensor,
+     null_embedding: torch.FloatTensor,
+     timestep: int,
+     guidance_scale: float = 7.5,
+) -> torch.FloatTensor:
+    noise_pred_cond = model.get_noise_pred(latent, timestep, prompt_embedding)
+    noise_pred_uncond = model.get_noise_pred(latent, timestep, null_embedding)
+    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+    latent = model.prev_step(noise_pred, timestep, latent)
+    return latent
+
+
+@torch.no_grad()
 def classifier_free_guidance(
     model: StableDiffusionAdapter,
     latent: torch.FloatTensor,
@@ -109,10 +125,14 @@ def classifier_free_guidance(
     prompt_embedding = model.encode_text(prompt)
     latents = [latent.clone()]
     for timestep in model.get_timesteps():
-        noise_pred_cond = model.get_noise_pred(latent, timestep, prompt_embedding)
-        noise_pred_uncond = model.get_noise_pred(latent, timestep, null_embedding)
-        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-        latent = model.prev_step(noise_pred, timestep, latent)
+        latent = classifier_free_guidance_step(
+            model,
+            latent,
+            prompt_embedding,
+            null_embedding,
+            timestep,
+            guidance_scale,
+        )
         latents.append(latent.detach())
     return latents
 

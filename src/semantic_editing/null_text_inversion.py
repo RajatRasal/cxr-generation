@@ -123,11 +123,11 @@ class NullTokenOptimisation(CFGOptimisation):
         self.null_embeddings = null_embeddings
 
     @torch.no_grad()
-    def generate(self, prompt: str) -> Image.Image:
+    def generate(self, prompt: str, edit_scale: float = 0.8) -> Image.Image:
         if not (hasattr(self, "null_embeddings") and hasattr(self, "latents")):
             assert ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
 
-        prompt_embedding = self.model.encode_text(prompt)
+        target_prompt_embedding = self.model.encode_text(prompt)
         # TODO: Move this into model adapter
         latent = self.latents[-1].expand(
             1,
@@ -140,7 +140,7 @@ class NullTokenOptimisation(CFGOptimisation):
             latent = classifier_free_guidance_step(
                 self.model,
                 latent,
-                prompt_embedding,
+                target_prompt_embedding,
                 self.null_embeddings[i],
                 timestep,
                 self.guidance_scale,

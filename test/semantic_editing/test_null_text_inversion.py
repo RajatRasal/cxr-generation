@@ -11,8 +11,8 @@ from semantic_editing.utils import plot_image_on_axis
 def test_reconstruction(nti, pti, cfg_ddim, image_prompt):
     image, prompt = image_prompt
 
-    nti.fit(*image_prompt, 1e-5)
-    pti.fit(*image_prompt, 1e-5)
+    nti.fit(*image_prompt)
+    pti.fit(*image_prompt)
     cfg_ddim.fit(*image_prompt)
 
     nti_recon = nti.generate(prompt)

@@ -45,6 +45,7 @@ class NullTokenOptimisation(CFGOptimisation):
         num_inner_steps: int = 50,
         learning_rate: float = 1e-2,
         image_size: int = 512, 
+        epsilon: float = 1e-5,
     ):
         self.model = model
         # TODO: Create a wrapper for a scheduler which implements the inversion method
@@ -55,6 +56,7 @@ class NullTokenOptimisation(CFGOptimisation):
         self.num_inner_steps = num_inner_steps
         self.learning_rate = learning_rate
         self.image_size = image_size
+        self.epsilon = epsilon
 
     def _cfg_with_prompt_noise_pred(
         self,
@@ -68,11 +70,12 @@ class NullTokenOptimisation(CFGOptimisation):
         latent_prev = self.model.prev_step(noise_pred, timestep, latent_cur)
         return latent_prev
 
-    def fit(self, image: Image.Image, prompt: str, epsilon: int = 0):
+    def fit(self, image: Image.Image, prompt: str):
         # TODO: Move epsilon into init
         image = image.resize((self.image_size, self.image_size))
 
         self.latents = ddim_inversion(self.model, image, prompt)
+        n_latents = len(self.latents)
 
         null_embeddings = []
         null_embedding = self.model.encode_text(NULL_STRING)
@@ -81,11 +84,13 @@ class NullTokenOptimisation(CFGOptimisation):
         bar = tqdm(total=self.num_inner_steps * self.model.ddim_steps)
         latent_cur = self.latents[-1]
         timesteps = self.model.get_timesteps()
-        for i in range(len(timesteps)):
+        n_timesteps = len(timesteps)
+        for i in range(n_timesteps):
             null_embedding = null_embedding.clone().detach()
             null_embedding.requires_grad = True
-            optimizer = Adam([null_embedding], lr=self.learning_rate * (1. - i / 100.))
-            latent_prev = self.latents[len(self.latents) - i - 2]
+            lr_scale_factor = 1. - i / (n_timesteps * 2)
+            optimizer = Adam([null_embedding], lr=self.learning_rate * lr_scale_factor)
+            latent_prev = self.latents[n_latents - i - 2]
             t = timesteps[i]
             with torch.no_grad():
                 noise_pred_cond = self.model.get_noise_pred(
@@ -106,7 +111,7 @@ class NullTokenOptimisation(CFGOptimisation):
                 optimizer.zero_grad()
                 loss_item = loss.item()
                 bar.update()
-                if loss_item < epsilon + i * 2e-5:
+                if loss_item < self.epsilon + i * 2e-5:
                     break
             for j in range(j + 1, self.num_inner_steps):
                 bar.update()
@@ -158,7 +163,8 @@ class PromptTokenOptimisation(CFGOptimisation):
         guidance_scale: int,
         num_inner_steps: int = 50,
         learning_rate: float = 1e-2,
-        image_size: int = 512, 
+        image_size: int = 512,
+        epsilon: float = 1e-5,
     ):
         self.model = model
         # TODO: Create a wrapper for a scheduler which implements the inversion method
@@ -169,6 +175,7 @@ class PromptTokenOptimisation(CFGOptimisation):
         self.num_inner_steps = num_inner_steps
         self.learning_rate = learning_rate
         self.image_size = image_size
+        self.epsilon = epsilon
 
     def _cfg_with_prompt_noise_pred(
         self,
@@ -182,7 +189,7 @@ class PromptTokenOptimisation(CFGOptimisation):
         latent_prev = self.model.prev_step(noise_pred, timestep, latent_cur)
         return latent_prev
 
-    def fit(self, image: Image.Image, prompt: str, epsilon: int = 0):
+    def fit(self, image: Image.Image, prompt: str):
         # TODO: Move epsilon into init
         image = image.resize((self.image_size, self.image_size))
 
@@ -196,10 +203,12 @@ class PromptTokenOptimisation(CFGOptimisation):
         bar = tqdm(total=self.num_inner_steps * self.model.ddim_steps)
         latent_cur = self.latents[-1]
         timesteps = self.model.get_timesteps()
-        for i in range(len(timesteps)):
+        n_timesteps = len(timesteps)
+        for i in range(n_timesteps):
             prompt_embedding = prompt_embedding.clone().detach()
             prompt_embedding.requires_grad = True
-            optimizer = Adam([prompt_embedding], lr=self.learning_rate * (1. - i / 100.))
+            lr_scale_factor = 1. - i / (n_timesteps * 2)
+            optimizer = Adam([prompt_embedding], lr=self.learning_rate * lr_scale_factor)
             latent_prev = self.latents[n_latents - i - 2]
             t = timesteps[i]
             with torch.no_grad():
@@ -221,7 +230,7 @@ class PromptTokenOptimisation(CFGOptimisation):
                 optimizer.zero_grad()
                 loss_item = loss.item()
                 bar.update()
-                if loss_item < epsilon + i * 2e-5:
+                if loss_item < self.epsilon + i * 2e-5:
                     break
             for j in range(j + 1, self.num_inner_steps):
                 bar.update()
@@ -238,7 +247,7 @@ class PromptTokenOptimisation(CFGOptimisation):
         self.prompt_embeddings = prompt_embeddings
 
     @torch.no_grad()
-    def generate(self, prompt: str, edit_scale: float = 0.8) -> Image.Image:
+    def generate(self, prompt: str, edit_scale: float = 0.5) -> Image.Image:
         if not (hasattr(self, "prompt_embeddings") and hasattr(self, "latents")):
             assert ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
 

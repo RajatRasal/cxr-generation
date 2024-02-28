@@ -7,7 +7,9 @@ from PIL import Image
 from diffusers import StableDiffusionPipeline
 
 from semantic_editing.diffusion import StableDiffusionAdapter
-from semantic_editing.null_text_inversion import CFGWithDDIM, NullTokenOptimisation, PromptTokenOptimisation
+from semantic_editing.classifier_free_guidance import CFGWithDDIM
+from semantic_editing.prompt_token_optimisation import PromptTokenOptimisation
+from semantic_editing.null_text_inversion import NullTokenOptimisation
 from semantic_editing.utils import seed_everything
 
 

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Literal, Union
+from typing import List, Literal, Type, Union
 
 import torch
 import torch.nn.functional as F
@@ -8,6 +8,8 @@ from PIL import Image
 from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeline
 from torch.optim import Adam
 from tqdm import tqdm
+
+from semantic_editing.attention import AttentionStore, AttendExciteCrossAttnProcessor, prepare_unet
 
 
 class StableDiffusionAdapter:
@@ -96,6 +98,32 @@ class StableDiffusionAdapter:
     def get_timesteps(self, inversion: bool = False) -> torch.IntTensor:
         timesteps = self.scheduler.timesteps
         return timesteps.flip(dims=(0,)) if inversion else timesteps
+
+    def register_attention_control(
+        self,
+        attention_store: AttentionStore,
+        attention_processor_type: Type[AttendExciteCrossAttnProcessor],
+    ):
+        self.attention_store = attention_store
+        self.unet = prepare_unet(self.unet)
+        attention_processors = {}
+        # TODO: Check if we need place_in_unet by looking at the experiments/tests in the DPL code
+        # I have a feeling that the AttnProcessor does not need to know the place_in_unet
+        # but it is helpful having this for visualisations.
+        for name in self.unet.attn_processors.keys():
+            if name.startswith("mid_block"):
+                place_in_unet = "mid"
+            elif name.startswith("up_blocks"):
+                place_in_unet = "up"
+            elif name.startswith("down_blocks"):
+                place_in_unet = "down"
+            else:
+                continue
+            attention_processors[name] = attention_processor_type(
+                attention_store=self.attention_store,
+                place_in_unet=place_in_unet,
+            )
+        self.unet.set_attn_processor(attention_processors)
 
 
 @torch.no_grad()

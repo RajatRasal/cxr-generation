@@ -26,10 +26,6 @@ class NullTokenOptimisation(CFGOptimisation):
         epsilon: float = 1e-5,
     ):
         self.model = model
-        # TODO: Create a wrapper for a scheduler which implements the inversion method
-        # e.g.
-        # DDIMInverseSchedulerAdapter, with method inversion(self, model, image, prompt) 
-        # that returns the list of latents given an image and a prompt
         self.guidance_scale = guidance_scale
         self.num_inner_steps = num_inner_steps
         self.learning_rate = learning_rate

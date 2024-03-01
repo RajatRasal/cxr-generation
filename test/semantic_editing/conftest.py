@@ -44,7 +44,7 @@ def sd_adapter(sd_model):
 
 @pytest.fixture
 def attention_store():
-    return AttentionStore(16)
+    return AttentionStore()
 
 
 @pytest.fixture

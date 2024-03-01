@@ -13,8 +13,14 @@ def test_visualise_cross_attention_maps(
     cfg_ddim.fit(image, prompt)
     cfg_ddim.generate(prompt)
 
-    resolution = attention_store.attention_resolution
-    attn_avg = attention_store.aggregate_attention(from_where=["up", "down", "mid"])
+    # TODO: Is this the denoising PCA or the inversion PCA?
+    resolution = 32
+    attn_avg = attention_store.aggregate_attention(
+        places_in_unet=["up", "down", "mid"],
+        is_cross=False,
+        res=resolution,
+        element_name="attn",
+    )
     attn_avg_flattened = attn_avg.reshape(resolution ** 2, -1).cpu().numpy()
 
     pca = PCA(n_components=3)

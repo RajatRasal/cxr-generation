@@ -1,7 +1,9 @@
-from PIL import Image
-
 import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
 from sklearn.decomposition import PCA
+
+from semantic_editing.tools import attention_map_pca, attention_map_cluster
 
 
 def test_visualise_cross_attention_maps(
@@ -21,16 +23,17 @@ def test_visualise_cross_attention_maps(
         res=resolution,
         element_name="attn",
     )
-    attn_avg_flattened = attn_avg.reshape(resolution ** 2, -1).cpu().numpy()
 
-    pca = PCA(n_components=3)
-    proj = pca.fit_transform(attn_avg_flattened)
-    proj = proj.reshape(resolution, resolution, 3)
-    proj_min = proj.min(axis=(0, 1))
-    proj_max = proj.max(axis=(0, 1))
-    proj_normalised = (proj - proj_min) / (proj_max - proj_min)
+    seed = 42
 
-    proj_img = Image.fromarray((proj_normalised * 255).astype(np.uint8))
+    # TODO: Make separate unittests for pca and clustering scripts
+    proj = attention_map_pca(attn_avg, n_components=3, normalise=True, seed=seed)
+    proj_img = Image.fromarray((proj * 255).astype(np.uint8)) 
     proj_img = proj_img.resize((512, 512))
     proj_img.save("ddim_inversion_avg_cross_attention_proj.pdf")
+
+    clusters = attention_map_cluster(attn_avg, n_clusters=5, seed=seed)
+    plt.imshow(clusters)
+    plt.axis("off")
+    plt.savefig("ddim_inversion_avg_cross_attention_clusters.pdf", bbox_inches="tight", pad_inches=0)
 

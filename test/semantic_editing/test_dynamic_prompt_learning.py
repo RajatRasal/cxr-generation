@@ -1,9 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
+import torch.nn.functional as F
 from PIL import Image
 from sklearn.decomposition import PCA
 
 from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_noun_indices, localise_nouns
+from semantic_editing.utils import plot_image_on_axis
 
 
 def test_visualise_cross_attention_maps_pca(
@@ -77,7 +80,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         res=32,
         element_name="attn",
     )
-    clusters = attention_map_cluster(attn_avg, gmm=False, n_clusters=6)
+    clusters = attention_map_cluster(attn_avg, gmm=False, n_clusters=5)
 
     cross_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
@@ -85,8 +88,22 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         res=16,
         element_name="attn",
     )
-    interpretation, masks = localise_nouns(clusters, cross_avg.cpu().numpy(), noun_indices)
-    print(interpretation)
+    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), noun_indices)
+
+    # def resize(mask):
+    #     mask_ = torch.from_numpy(mask).float().unsqueeze(0).unsqueeze(0)
+    #     mask_ = F.interpolate(mask_, size=512, mode="nearest")
+    #     mask_ = mask_.round().bool().int().squeeze(0).squeeze(0).numpy()
+    #     return mask_
+
+    masks = {k: Image.fromarray((v * 255).astype(np.uint8)) for k, v in masks.items()}
+
+    fig, axes = plt.subplots(nrows=1, ncols=len(masks), figsize=(15, 5))
+    plot_image_on_axis(axes[0], masks["BG"], "Background")
+    del masks["BG"]
+    for i, (k, v) in enumerate(masks.items()):
+        plot_image_on_axis(axes[i + 1], v, k.capitalize())
+    fig.savefig("masks.pdf")
 
     assert False
 

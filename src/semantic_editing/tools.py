@@ -98,22 +98,40 @@ def localise_nouns(
     noun_indices = [i for i, _ in index_noun_pairs]
     noun_ca_maps = cross_attention[:, :, noun_indices]
 
+    # Normalise the noun cross-attention maps.
     normalised_noun_ca_maps = np.zeros_like(noun_ca_maps).repeat(scale, axis=0).repeat(scale, axis=1)
-
     for i in range(noun_ca_maps.shape[2]):
         noun_ca_map = noun_ca_maps[:, :, i].repeat(scale, axis=0).repeat(scale, axis=1)
         normalised_noun_ca_maps[:, :, i] = (noun_ca_map - np.abs(noun_ca_map.min())) / noun_ca_map.max()
 
-    cluster_interpretation = {}
-    cluster_masks = {}
+    masks = {}
     n_clusters = len(np.unique(clusters))
     for c in range(n_clusters):
         cluster_mask = np.zeros_like(clusters)
         cluster_mask[clusters == c] = 1
-        score_maps = [cluster_mask * normalised_noun_ca_maps[:, :, i] for i in range(len(noun_indices))]
-        scores = [score_map.sum() / cluster_mask.sum() for score_map in score_maps]
-        cluster_interpretation[c] = noun_names[np.argmax(np.array(scores))] if max(scores) > background_threshold else "BG"
-        cluster_masks[c] = cluster_mask
+        # Agreement score between each cluster in the self-attention maps
+        # and the cross-attention map for each noun shows how much of the
+        # cluster_mask overlaps the cross-attention maps.
+        agreement_score_maps = [
+            cluster_mask * normalised_noun_ca_maps[:, :, i]
+            for i in range(normalised_noun_ca_maps.shape[2])
+        ]
+        agreement_scores = [
+            agreement_score_map.sum() / cluster_mask.sum()
+            for agreement_score_map in agreement_score_maps
+        ]
+        # If none of the agreement scores exceed the threshold, then none
+        # of the noun cross-attention maps are sufficiently overlapping
+        # the cluster c. Thus, cluster c forms part of the background.
+        if max(agreement_scores) > background_threshold:
+            c = noun_names[np.argmax(np.array(agreement_scores))]
+        else:
+            c = "BG"
 
-    return cluster_interpretation, cluster_mask
+        if c not in masks:
+            masks[c] = cluster_mask
+        else:
+            masks[c] += cluster_mask
+
+    return masks
 

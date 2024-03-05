@@ -83,3 +83,18 @@ def test_ddim_inversion(sd_adapter, image_prompt):
     gen_high_guidance = cfg_with_guidance(7.5)
 
     assert True
+
+
+def test_tokenisation(sd_adapter, image_prompt):
+    image, prompt = image_prompt
+    words = [word.lower() for word in prompt.split(" ")]
+    n_words = len(words)
+    tokens = sd_adapter.tokenise_text(prompt, string=True)
+    assert tokens[0] == "<|startoftext|>"
+    assert all([
+        token.endswith("</w>") and token.startswith(word)
+        for token, word in zip(tokens[1:n_words + 1], words)
+    ])
+    assert all([token == "<|endoftext|>" for token in tokens[n_words + 1:]])
+    assert len(tokens) == sd_adapter.tokenizer.model_max_length
+

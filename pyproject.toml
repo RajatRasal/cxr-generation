@@ -5,32 +5,33 @@ description = ""
 authors = ["Rajat Rasal"]
 readme = "README.md"
 packages = [
-    { include = "glide", from = "src" },
     { include = "dataset", from = "src" },
-    { include = "text_encoder", from = "src" }
+    { include = "semantic_editing", from = "src" }
 ]
 
 [tool.poetry.scripts]
-image_train = "improved_diffusion.scripts.image_train:main"
-image_sample = "improved_diffusion.scripts.image_sample:main"
-display_samples = "improved_diffusion.scripts.npz_to_image:main"
-dataset = "dataset.dataset:main"
 format_reports = "dataset.create_section_files:cli"
-encode_reports = "dataset.embed_reports:cli"
+experiments = "semantic_editing.experiments:main"
+nti = "semantic_editing.null_text_inversion:main"
 
 [tool.poetry.dependencies]
 python = "3.9.18"
-torch = "2.1.1"
+torch = "2.1.2"
+diffusers = "0.26.2"
+accelerate = "0.26.1"
 pillow = "9.3.0"
-numpy = "1.26.0"
+numpy = "1.26.3"
 blobfile = "1.0.5"
 mpi4py = "3.1.5"
 setuptools = "68.2.2"
-matplotlib = "3.8.0"
-pandas = "2.1.3"
+matplotlib = "3.8.2"
+pandas = "2.1.4"
 tqdm = "4.66.1"
-transformers = "4.35.2"
-torchvision = "0.16.1"
+transformers = "4.36.2"
+torchvision = "0.16.2"
+torchmetrics = "1.3.1"
+pytest = "8.0.1"
+scikit-learn = "1.4.1.post1"
 
 [tool.poetry.group.gpu]
 optional = true

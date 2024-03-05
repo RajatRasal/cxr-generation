@@ -26,15 +26,20 @@ class StableDiffusionAdapter:
         self.device = self.model.device
 
     @torch.no_grad()
-    def encode_text(self, prompt: str) -> torch.Tensor:
-        text_input = self.tokenizer(
+    def tokenise_text(self, prompt: str, string: bool = False) -> Union[torch.IntTensor, List[str]]:
+        input_ids = self.tokenizer(
             [prompt],
             padding="max_length",
             max_length=self.tokenizer.model_max_length,
             truncation=True,
             return_tensors="pt",
-        )
-        input_ids = text_input.input_ids.to(self.device)
+        ).input_ids
+        return self.tokenizer.convert_ids_to_tokens(input_ids[0].tolist()) if string else input_ids
+
+    @torch.no_grad()
+    def encode_text(self, prompt: str) -> torch.Tensor:
+        text_input_ids = self.tokenise_text(prompt)
+        input_ids = text_input_ids.to(self.device)
         text_embeddings = self.text_encoder(input_ids)[0]
         return text_embeddings
 

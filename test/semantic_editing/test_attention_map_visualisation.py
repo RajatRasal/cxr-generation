@@ -9,86 +9,82 @@ from semantic_editing.tools import attention_map_pca, attention_map_cluster, fin
 from semantic_editing.utils import plot_image_on_axis
 
 
-def test_visualise_cross_attention_maps_pca(
+def test_visualise_self_attention_maps_pca(
     cfg_ddim,
     image_prompt_cat_and_dog,
     attention_store,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
-    cfg_ddim.generate(prompt)
 
-    # TODO: Is this the denoising PCA or the inversion PCA?
-    resolution = 32
-    attn_avg = attention_store.aggregate_attention(
-        places_in_unet=["up", "down", "mid"],
-        is_cross=False,
-        res=resolution,
-        element_name="attn",
-    )
+    fig, axes = plt.subplots(nrows=3, ncols=1)
 
-    # TODO: Make separate unittests for pca and clustering scripts
-    proj = attention_map_pca(attn_avg, n_components=3, normalise=True)
-    proj_img = Image.fromarray((proj * 255).astype(np.uint8)) 
-    proj_img = proj_img.resize((512, 512))
-    proj_img.save("ddim_inversion_avg_cross_attention_proj.pdf")
+    # PCA for attention maps from inversion
+    for i, res in enumerate([16, 32, 64]):
+        attn_avg = attention_store.aggregate_attention(
+            places_in_unet=["up", "down", "mid"],
+            is_cross=False,
+            res=res,
+            element_name="attn",
+        )
+        proj = attention_map_pca(attn_avg, n_components=3, normalise=True)
+        proj_img = Image.fromarray((proj * 255).astype(np.uint8)) 
+        proj_img = proj_img.resize((512, 512))
+        plot_image_on_axis(axes[i], proj_img, f"{res} x {res}")
+    fig.savefig("ddim_inversion_avg_self_attention_proj.pdf")
+
+    assert False
 
 
-def test_visualise_cross_attention_maps_clustering(
+def test_visualise_self_attention_maps_clustering(
     cfg_ddim,
     image_prompt_cat_and_dog,
     attention_store,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
-    cfg_ddim.generate(prompt)
 
-    # TODO: Is this the denoising PCA or the inversion PCA?
-    attn_avg = attention_store.aggregate_attention(
-        places_in_unet=["up", "down", "mid"],
-        is_cross=True,
-        res=16,
-        element_name="attn",
-    )
+    def _plot(alg: str, n_clusters: int, name: str):
+        fig, axes = plt.subplots(nrows=3, ncols=1)
+        for i, res in enumerate([16, 32, 64]):
+            attn_avg = attention_store.aggregate_attention(
+                places_in_unet=["up", "down", "mid"],
+                is_cross=False,
+                res=res,
+                element_name="attn",
+            )
+            clusters = attention_map_cluster(attn_avg, algorithm=alg, n_clusters=n_clusters)
+            plot_image_on_axis(axes[i], clusters, f"{res} x {res}")
+        fig.savefig(name)
 
-    clusters = attention_map_cluster(attn_avg, gmm=False, n_clusters=5)
-    plt.imshow(clusters)
-    plt.axis("off")
-    plt.savefig("ddim_inversion_avg_cross_attention_clusters_kmeans.pdf", bbox_inches="tight", pad_inches=0)
-
-    clusters = attention_map_cluster(attn_avg, gmm=True, n_clusters=10)
-    plt.imshow(clusters)
-    plt.axis("off")
-    plt.savefig("ddim_inversion_avg_cross_attention_clusters_gmm.pdf", bbox_inches="tight", pad_inches=0)
+    for alg in ["kmeans", "gmm", "bgmm"]:
+        _plot(alg, 10, f"ddim_inversion_avg_self_attention_clusters_{alg}.pdf")
 
 
 def test_visualise_cross_attention_maps_nouns_clustering(
-    sd_adapter_with_attn_excite,
     cfg_ddim,
     image_prompt_cat_and_dog,
     attention_store,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
-    cfg_ddim.generate(prompt)
 
     noun_indices = find_noun_indices(cfg_ddim.model, prompt)
 
-    attn_avg = attention_store.aggregate_attention(
+    self_attn_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=False,
         res=32,
         element_name="attn",
     )
-    clusters = attention_map_cluster(attn_avg, gmm=False, n_clusters=5)
-
+    clusters = attention_map_cluster(self_attn_avg, "kmeans", n_clusters=10)
     cross_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=True,
         res=16,
         element_name="attn",
     )
-    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), noun_indices)
+    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), noun_indices, 0.3)
     masks = {k: Image.fromarray((v * 255).astype(np.uint8)) for k, v in masks.items()}
 
     fig, axes = plt.subplots(nrows=1, ncols=len(masks), figsize=(15, 5))
@@ -96,9 +92,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     del masks["BG"]
     for i, (k, v) in enumerate(masks.items()):
         plot_image_on_axis(axes[i + 1], v, k.capitalize())
-    fig.savefig("masks.pdf")
-
-    assert False
+    fig.savefig("ddim_inversion_object_masks.pdf")
 
 
 def test_visualise_prompt_localisation(
@@ -109,7 +103,6 @@ def test_visualise_prompt_localisation(
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
-    cfg_ddim.generate(prompt)
 
     noun_indices = find_noun_indices(cfg_ddim.model, prompt)
     print(noun_indices)
@@ -128,7 +121,5 @@ def test_visualise_prompt_localisation(
             title = noun if i == 0 else ""
             plot_image_on_axis(axes[i, j], attn_map, title)
 
-    fig.savefig("ca_maps.pdf")
-
-    assert False
+    fig.savefig("ddim_inversion_avg_cross_attention_maps_nouns.pdf")
 

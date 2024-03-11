@@ -1,11 +1,11 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Tuple
 
 import nltk
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.mixture import GaussianMixture
+from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
 
 from semantic_editing.diffusion import StableDiffusionAdapter
 from semantic_editing.attention import AttentionStore
@@ -50,7 +50,7 @@ def attention_map_pca(
 
 def attention_map_cluster(
     attn_map: torch.FloatTensor,
-    gmm: bool = False,
+    algorithm: Literal["kmeans", "gmm", "bgmm"],
     n_clusters: int = 5,
     **clustering_kwargs,
 ) -> np.ndarray:
@@ -58,16 +58,23 @@ def attention_map_cluster(
 
     attn_map_flat = attn_map.cpu().numpy().reshape(res1 ** 2, -1)
 
-    if gmm:
+    if algorithm == "gmm":
         model = GaussianMixture(
             n_components=n_clusters,
             **clustering_kwargs,
         )
-    else:
+    elif algorithm == "bgmm":
+        model = BayesianGaussianMixture(
+            n_components=n_clusters,
+            **clustering_kwargs,
+        )
+    elif algorithm == "kmeans":
         model = KMeans(
             n_clusters=n_clusters,
             **clustering_kwargs,
         )
+    else:
+        raise ValueError(f"Algorithm {algorithm} not valid")
     clusters = model.fit_predict(attn_map_flat)
     clusters = clusters.reshape(res1, res2)
 
@@ -137,7 +144,11 @@ def localise_nouns(
     return masks
 
 
-def background_mask(attention_store: AttentionStore, index_noun_pairs: List[Tuple[int, str]]) -> torch.FloatTensor:
+def background_mask(
+    attention_store: AttentionStore,
+    index_noun_pairs: List[Tuple[int, str]],
+    background_threshold: float = 0.2,
+) -> torch.FloatTensor:
     attn_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=False,
@@ -152,5 +163,5 @@ def background_mask(attention_store: AttentionStore, index_noun_pairs: List[Tupl
         res=16,
         element_name="attn",
     )
-    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), index_noun_pairs)
+    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), index_noun_pairs, background_threshold)
     return masks["BG"]

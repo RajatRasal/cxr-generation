@@ -109,6 +109,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         return latent_prev
 
     def fit(self, image: Image.Image, prompt: str):
+        self.model.attention_store.reset()
+
         # TODO: Include prepare_unet function from UNet2DConditionalModel
         # TODO: Ensure that attention_store is registered
         image = image.resize((self.image_size, self.image_size))
@@ -134,6 +136,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         prompt_token_ids = self.model.tokenise_text(prompt)
         index_no_updates = torch.ones(len(self.model.tokenizer), dtype=bool)
         index_no_updates[prompt_token_ids] = False
+        self.index_no_updates = index_no_updates
 
         # NTI in outer loop, DPL in inner loop.
         optimised_null_embeddings_list = []
@@ -205,7 +208,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 self.model.attention_store.reset()
             
             torch.cuda.empty_cache()
-            optimised_prompt_noun_embeddings = self.model.text_encoder.get_input_embeddings().weight[~index_no_updates].detach().cpu()
+            optimised_prompt_noun_embeddings = self.model.text_encoder.get_input_embeddings().weight[~index_no_updates].detach()
             optimised_prompt_noun_embeddings_list.append(optimised_prompt_noun_embeddings)
             
             # --------- NTI
@@ -251,6 +254,34 @@ class DynamicPromptOptimisation(CFGOptimisation):
         self.null_embeddings = optimised_null_embeddings_list
         self.prompt_noun_embeddings = optimised_prompt_noun_embeddings_list
 
+    @torch.no_grad()
     def generate(self, prompt: str) -> Image.Image:
-        pass
+        # TODO: This currently assumes reconstruction. Change this to implement object editing.
+        if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "index_no_updates")):
+            raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
+        
+        self.model.attention_store.reset()
+
+        # TODO: Move this into model adapter
+        latent = self.latents[-1].expand(
+            1,
+            self.model.unet.config.in_channels,
+            self.image_size // 8,
+            self.image_size // 8
+        ).to(self.model.device)
+
+        for i, timestep in enumerate(tqdm(self.model.get_timesteps())):
+            self.model.text_encoder.get_input_embeddings().weight[~self.index_no_updates] = self.prompt_noun_embeddings[i]
+            target_prompt_embedding = self.model.encode_text(prompt)
+            latent = classifier_free_guidance_step(
+                self.model,
+                latent,
+                target_prompt_embedding,
+                self.null_embeddings[i],
+                timestep,
+                self.guidance_scale,
+            )
+
+        image = self.model.decode_latent(latent)
+        return image
 

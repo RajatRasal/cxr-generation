@@ -19,6 +19,7 @@ class CFGWithDDIM(CFGOptimisation):
         self.image_size = image_size
 
     def fit(self, image: Image.Image, prompt: str):
+        self.model.attention_store.reset()
         if self.image_size is not None:
             image = image.resize((self.image_size, self.image_size))
         self.latent_T = ddim_inversion(self.model, image, prompt)[-1]
@@ -26,6 +27,8 @@ class CFGWithDDIM(CFGOptimisation):
     def generate(self, prompt: str) -> Image.Image:
         if not hasattr(self, "latent_T"):
             assert ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
+
+        self.model.attention_store.reset()
 
         latents = classifier_free_guidance(
             self.model,

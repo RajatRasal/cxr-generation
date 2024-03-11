@@ -15,9 +15,9 @@ from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.utils import seed_everything
 
 
-SEED = 8888
-# STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
-STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
+SEED = 42
+STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
+# STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
 
 @pytest.fixture(autouse=True)
 def initialise_random_seeds():
@@ -81,7 +81,8 @@ def dpl(sd_adapter_with_attn_excite):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_excite,
         guidance_scale=7.5,
-        num_inner_steps_dpl=2,
+        num_inner_steps_dpl=25,
+        num_inner_steps_nti=20,
         disjoint_object_coeff=0,
         background_leakage_coeff=0,
     )

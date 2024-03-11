@@ -8,6 +8,7 @@ from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
 
 from semantic_editing.diffusion import StableDiffusionAdapter
+from semantic_editing.attention import AttentionStore
 
 
 def normalise_image(image: np.ndarray) -> np.ndarray:
@@ -135,3 +136,21 @@ def localise_nouns(
 
     return masks
 
+
+def background_mask(attention_store: AttentionStore, index_noun_pairs: List[Tuple[int, str]]) -> torch.FloatTensor:
+    attn_avg = attention_store.aggregate_attention(
+        places_in_unet=["up", "down", "mid"],
+        is_cross=False,
+        res=32,
+        element_name="attn",
+    )
+    clusters = attention_map_cluster(attn_avg, gmm=False, n_clusters=5)
+
+    cross_avg = attention_store.aggregate_attention(
+        places_in_unet=["up", "down", "mid"],
+        is_cross=True,
+        res=16,
+        element_name="attn",
+    )
+    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), index_noun_pairs)
+    return masks["BG"]

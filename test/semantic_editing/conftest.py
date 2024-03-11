@@ -11,10 +11,13 @@ from semantic_editing.classifier_free_guidance import CFGWithDDIM
 from semantic_editing.diffusion import StableDiffusionAdapter
 from semantic_editing.null_text_inversion import NullTokenOptimisation
 from semantic_editing.prompt_token_optimisation import PromptTokenOptimisation
+from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.utils import seed_everything
 
 
 SEED = 8888
+# STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
+STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
 
 @pytest.fixture(autouse=True)
 def initialise_random_seeds():
@@ -31,7 +34,7 @@ def generator():
 @pytest.fixture
 def sd_model():
     return StableDiffusionPipeline.from_pretrained(
-        "runwayml/stable-diffusion-v1-5",
+        STABLE_DIFFUSION_VERSION,
 	    torch_dtype=torch.float32,
 	    safety_checker=None,
 	).to("cuda")
@@ -54,9 +57,6 @@ def sd_adapter_with_attn_excite(sd_model, attention_store):
         attention_store,
         AttendExciteCrossAttnProcessor,
     )
-    # adapter.text_encoder.text_model.encoder.requires_grad_(False)
-    # adapter.text_encoder.text_model.final_layer_norm.requires_grad_(False)
-    # adapter.text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
     return adapter
 
 
@@ -69,6 +69,22 @@ def image_prompt():
 @pytest.fixture
 def image_prompt_cat_and_dog():
     return Image.open("/vol/biomedic3/rrr2417/cxr-generation/test/semantic_editing/catdog.jpg"), "a cat and a dog"
+
+
+@pytest.fixture
+def image_prompt_girl_and_boy_trampoline():
+    return Image.open("/vol/biomedic3/rrr2417/cxr-generation/test/semantic_editing/catdog.jpg"), "a cat and a dog"
+
+
+@pytest.fixture
+def dpl(sd_adapter_with_attn_excite):
+    return DynamicPromptOptimisation(
+        sd_adapter_with_attn_excite,
+        guidance_scale=7.5,
+        num_inner_steps_dpl=2,
+        disjoint_object_coeff=0,
+        background_leakage_coeff=0,
+    )
 
 
 @pytest.fixture
@@ -85,7 +101,3 @@ def pti(sd_adapter):
 def cfg_ddim(sd_adapter_with_attn_excite):
     return CFGWithDDIM(sd_adapter_with_attn_excite, guidance_scale=1, image_size=512)
 
-
-@pytest.fixture
-def dpl(sd_adapter_with_attn_excite):
-    return DynamicPromptOptimisation(sd_adapter_with_attn_excite, guidance_scale=7.5, num_inner_steps=20)

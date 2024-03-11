@@ -10,6 +10,7 @@ packages = [
 ]
 
 [tool.poetry.scripts]
+caption_imagenet = "dataset.imagenet_captioning:main"
 format_reports = "dataset.create_section_files:cli"
 experiments = "semantic_editing.experiments:main"
 nti = "semantic_editing.null_text_inversion:main"
@@ -19,6 +20,7 @@ python = "3.9.18"
 torch = "2.1.2"
 diffusers = "0.26.2"
 accelerate = "0.26.1"
+bitsandbytes = "0.43.0"
 pillow = "9.3.0"
 numpy = "1.26.3"
 blobfile = "1.0.5"

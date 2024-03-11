@@ -43,6 +43,12 @@ class StableDiffusionAdapter:
         text_embeddings = self.text_encoder(input_ids)[0]
         return text_embeddings
 
+    def encode_text_with_grad(self, prompt: str) -> torch.Tensor:
+        text_input_ids = self.tokenise_text(prompt)
+        input_ids = text_input_ids.to(self.device)
+        text_embeddings = self.text_encoder(input_ids)[0]
+        return text_embeddings
+
     @torch.no_grad()
     def encode_image(self, image: Image.Image) -> torch.Tensor:
         image = np.array(image)
@@ -97,8 +103,12 @@ class StableDiffusionAdapter:
         latent: torch.Tensor,
         timestep: int,
         embedding: torch.FloatTensor,
+        zero_grad: bool = False,
     ) -> torch.FloatTensor:
-        return self.unet(latent, timestep, encoder_hidden_states=embedding).sample
+        sample = self.unet(latent, timestep, encoder_hidden_states=embedding).sample
+        if zero_grad:
+            self.unet.zero_grad()
+        return sample
 
     def get_timesteps(self, inversion: bool = False) -> torch.IntTensor:
         timesteps = self.scheduler.timesteps

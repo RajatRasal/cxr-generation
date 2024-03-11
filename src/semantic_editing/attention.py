@@ -165,6 +165,7 @@ class AttendExciteCrossAttnProcessor(AttnProcessorWithAttentionStore):
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
         # only need to store attention maps during the Attend and Excite process
+        # TODO: Only call this when grad is True
         self.attention_store(attention_probs, is_cross, self.place_in_unet, hidden_states, query, key, value)
 
         hidden_states = torch.bmm(attention_probs, value)

@@ -15,7 +15,7 @@ from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.utils import seed_everything
 
 
-SEED = 42
+SEED = 8888
 STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
 # STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
 

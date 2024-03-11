@@ -105,7 +105,6 @@ def test_visualise_prompt_localisation(
     cfg_ddim.fit(image, prompt)
 
     noun_indices = find_noun_indices(cfg_ddim.model, prompt)
-    print(noun_indices)
 
     resolutions = [16, 32, 64]
     fig, axes = plt.subplots(nrows=len(resolutions), ncols=len(noun_indices))

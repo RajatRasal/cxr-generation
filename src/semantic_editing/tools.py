@@ -81,10 +81,15 @@ def attention_map_cluster(
     return clusters
 
 
-def find_noun_indices(model: StableDiffusionAdapter, prompt: str) -> List[Tuple[int, str]]:
+def stable_diffusion_tokens(model: StableDiffusionAdapter, prompt: str) -> List[str]:
     tokens = model.tokenise_text(prompt, True)
     suffix_len = len("</w>")
     tokens = [token[:-suffix_len] for token in tokens[1:tokens.index("<|endoftext|>")]]
+    return tokens
+
+
+def find_noun_indices(model: StableDiffusionAdapter, prompt: str) -> List[Tuple[int, str]]:
+    tokens = stable_diffusion_tokens(model, prompt)
     pos_tags = nltk.pos_tag(tokens)
     return [
         (i + 1, token)
@@ -155,7 +160,7 @@ def background_mask(
         res=32,
         element_name="attn",
     )
-    clusters = attention_map_cluster(attn_avg, gmm=False, n_clusters=5)
+    clusters = attention_map_cluster(attn_avg, algorithm="kmeans", n_clusters=5)
 
     cross_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],

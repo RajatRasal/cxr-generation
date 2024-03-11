@@ -123,6 +123,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         prompt_embedding = self.model.encode_text(prompt)
         index_noun_pairs = find_noun_indices(self.model, prompt)
         noun_indices = [i for i, _ in index_noun_pairs]
+        # TODO: Use localise_nouns here
         bg_maps = background_mask(self.model.attention_store, index_noun_pairs)
         self.model.attention_store.reset()
 

@@ -104,7 +104,7 @@ class NullTokenOptimisation(CFGOptimisation):
     @torch.no_grad()
     def generate(self, prompt: str, edit_scale: float = 0.8) -> Image.Image:
         if not (hasattr(self, "null_embeddings") and hasattr(self, "latents")):
-            assert ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
+            raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
 
         target_prompt_embedding = self.model.encode_text(prompt)
         # TODO: Move this into model adapter

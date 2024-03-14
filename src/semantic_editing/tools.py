@@ -3,6 +3,7 @@ from typing import Dict, List, Literal, Tuple
 import nltk
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
@@ -23,11 +24,34 @@ def normalise_image(image: np.ndarray) -> np.ndarray:
 
 
 def _validate_attn_map(attn_map: torch.FloatTensor):
-    if len(attn_map.shape) != 3:
-        raise ValueError(f"Invalid attention map. Must have 3 dimensions not {attn_map.shape}")
-    res1, res2, features = attn_map.shape[0], attn_map.shape[1], attn_map.shape[2]
-    assert res1 == res2
-    return res1, res2, features
+    shape = attn_map.shape
+    if len(shape) != 3:
+        raise ValueError(f"Invalid attention map. Must have 3 dimensions not {shape}")
+    if shape[0] != shape[1]:
+        raise ValueError(f"Invalid attention map. Dim 1 ({shape[0]}) != Dim 2 ({shape[1]})")
+    res, _, features = shape
+    return res, features
+
+
+def attention_map_upsample(
+    attn_map: torch.FloatTensor,
+    size: int = 512,
+    mode: Literal["bilinear"] = "bilinear",
+):
+    # TODO: Write unittest for this method
+    # shape = (res, res, n_tokens)
+    res, features = _validate_attn_map(attn_map)
+    # shape = (n_tokens, res, res)
+    attn_map = attn_map.permute(2, 0, 1)
+    # shape = (n_tokens, 1, res, res)
+    attn_map = attn_map.unsqueeze(1)
+    # shape = (n_tokens, 1, size, size)
+    attn_map = F.interpolate(attn_map, size=size, mode=mode)
+    # shape = (n_tokens, size, size)
+    attn_map = attn_map.squeeze(1)
+    # shape = (size, size, n_tokens)
+    attn_map = attn_map.permute(1, 2, 0)
+    return attn_map
 
 
 def attention_map_pca(
@@ -37,12 +61,12 @@ def attention_map_pca(
     seed: int = 42,
     **pca_kwargs,
 ) -> np.ndarray:
-    res1, res2, features = _validate_attn_map(attn_map)
+    res, features = _validate_attn_map(attn_map)
 
-    attn_map_flat = attn_map.cpu().numpy().reshape(res1 ** 2, -1)
+    attn_map_flat = attn_map.cpu().numpy().reshape(res ** 2, -1)
     
     pca = PCA(n_components=n_components, random_state=seed, **pca_kwargs)
-    proj = pca.fit_transform(attn_map_flat).reshape(res1, res1, n_components)
+    proj = pca.fit_transform(attn_map_flat).reshape(res, res, n_components)
     proj = normalise_image(proj) if normalise else proj
 
     return proj
@@ -54,9 +78,9 @@ def attention_map_cluster(
     n_clusters: int = 5,
     **clustering_kwargs,
 ) -> np.ndarray:
-    res1, res2, features = _validate_attn_map(attn_map)
+    res, features = _validate_attn_map(attn_map)
 
-    attn_map_flat = attn_map.cpu().numpy().reshape(res1 ** 2, -1)
+    attn_map_flat = attn_map.cpu().numpy().reshape(res ** 2, -1)
 
     if algorithm == "gmm":
         model = GaussianMixture(
@@ -76,15 +100,32 @@ def attention_map_cluster(
     else:
         raise ValueError(f"Algorithm {algorithm} not valid")
     clusters = model.fit_predict(attn_map_flat)
-    clusters = clusters.reshape(res1, res2)
+    clusters = clusters.reshape(res, res)
 
     return clusters
 
 
-def stable_diffusion_tokens(model: StableDiffusionAdapter, prompt: str) -> List[str]:
+def stable_diffusion_tokens(
+    model: StableDiffusionAdapter,
+    prompt: str,
+    include_separators: bool = False,
+) -> List[str]:
+    word_end = "</w>"
+    separator_start = "<|startoftext|>"
+    separator_end = "<|endoftext|>"
+
+    # TODO: These assertions are all unittests for tokenise_text.
+    # Do not include assertions here. Instead, write unittests for 
+    # tokenise_text method.
     tokens = model.tokenise_text(prompt, True)
-    suffix_len = len("</w>")
-    tokens = [token[:-suffix_len] for token in tokens[1:tokens.index("<|endoftext|>")]]
+    assert tokens[0] == separator_start
+    separator_end_index = tokens.index(separator_end)
+    assert all([tok not in [separator_start, separator_end] for tok in tokens[1:separator_end_index]])
+
+    suffix_len = len(word_end)
+    tokens = [token[:-suffix_len] for token in tokens[1:separator_end_index]]
+    if include_separators:
+        tokens = [separator_start] + tokens + [separator_end]
     return tokens
 
 
@@ -112,7 +153,9 @@ def localise_nouns(
     noun_ca_maps = cross_attention[:, :, noun_indices]
 
     # Normalise the noun cross-attention maps.
-    normalised_noun_ca_maps = np.zeros_like(noun_ca_maps).repeat(scale, axis=0).repeat(scale, axis=1)
+    normalised_noun_ca_maps = np.zeros_like(noun_ca_maps) \
+        .repeat(scale, axis=0) \
+        .repeat(scale, axis=1)
     for i in range(noun_ca_maps.shape[2]):
         noun_ca_map = noun_ca_maps[:, :, i].repeat(scale, axis=0).repeat(scale, axis=1)
         normalised_noun_ca_maps[:, :, i] = (noun_ca_map - np.abs(noun_ca_map.min())) / noun_ca_map.max()
@@ -168,5 +211,10 @@ def background_mask(
         res=16,
         element_name="attn",
     )
-    masks = localise_nouns(clusters, cross_avg.cpu().numpy(), index_noun_pairs, background_threshold)
+    masks = localise_nouns(
+        clusters,
+        cross_avg.cpu().numpy(),
+        index_noun_pairs,
+        background_threshold,
+    )
     return masks["BG"]

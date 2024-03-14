@@ -1,9 +1,12 @@
 import random
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import numpy as np
 import torch
+from PIL import Image
 from diffusers import StableDiffusionPipeline
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 
 def seed_everything(seed: int = 50, deterministic_cuda: bool = False):
@@ -27,7 +30,18 @@ def init_stable_diffusion(
     ).to(device)
 
 
-def plot_image_on_axis(ax, image, title):
-    ax.set_title(title)
+def plot_image_on_axis(
+    ax: Axes,
+    image: Union[Image.Image, np.ndarray],
+    title: str,
+    fontsize: int = 10,
+):
+    ax.set_title(title, fontsize=fontsize)
     ax.imshow(image)
     ax.set_axis_off()
+
+
+def save_figure(fig: Figure, name: str):
+    if not name.endswith(".pdf"):
+        raise ValueError("Figure name must end with '.pdf'")
+    fig.savefig(name, bbox_inches="tight")

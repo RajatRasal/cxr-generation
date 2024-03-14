@@ -1,6 +1,7 @@
 import random
 
 import pytest
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
@@ -15,7 +16,9 @@ from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.utils import seed_everything
 
 
-SEED = 8888
+plt.rcParams["image.cmap"] = "jet"
+
+SEED = 0
 STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
 # STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
 
@@ -33,11 +36,15 @@ def generator():
 
 @pytest.fixture
 def sd_model():
-    return StableDiffusionPipeline.from_pretrained(
+    model = StableDiffusionPipeline.from_pretrained(
         STABLE_DIFFUSION_VERSION,
 	    torch_dtype=torch.float32,
 	    safety_checker=None,
 	).to("cuda")
+    model.text_encoder.text_model.encoder.requires_grad_(False)
+    model.text_encoder.text_model.final_layer_norm.requires_grad_(False)
+    model.text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
+    return model
 
 
 @pytest.fixture
@@ -82,15 +89,22 @@ def dpl(sd_adapter_with_attn_excite):
         sd_adapter_with_attn_excite,
         guidance_scale=7.5,
         num_inner_steps_dpl=25,
-        num_inner_steps_nti=20,
+        num_inner_steps_nti=50,
+        attention_balancing_coeff=1.0,
+        attention_balancing_alpha=25,
+        attention_balancing_beta=0.3,
         disjoint_object_coeff=0,
         background_leakage_coeff=0,
     )
 
 
 @pytest.fixture
-def nti(sd_adapter):
-    return NullTokenOptimisation(sd_adapter, guidance_scale=7.5, num_inner_steps=20)
+def nti(sd_adapter_with_attn_excite):
+    return NullTokenOptimisation(
+        sd_adapter_with_attn_excite,
+        guidance_scale=7.5,
+        num_inner_steps=20,
+    )
 
 
 @pytest.fixture

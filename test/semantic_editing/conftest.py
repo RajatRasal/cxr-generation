@@ -90,7 +90,7 @@ def dpl(sd_adapter_with_attn_excite):
         guidance_scale=7.5,
         num_inner_steps_dpl=25,
         num_inner_steps_nti=50,
-        attention_balancing_coeff=1.0,
+        attention_balancing_coeff=0,
         attention_balancing_alpha=25,
         attention_balancing_beta=0.3,
         disjoint_object_coeff=0,
@@ -103,7 +103,7 @@ def nti(sd_adapter_with_attn_excite):
     return NullTokenOptimisation(
         sd_adapter_with_attn_excite,
         guidance_scale=7.5,
-        num_inner_steps=20,
+        num_inner_steps=50,
     )
 
 

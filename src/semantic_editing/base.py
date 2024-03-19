@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+from typing import List
 
+import torch
 from PIL import Image
 
 
@@ -18,7 +20,10 @@ class CFGOptimisation(ABC):
     # def guidance_scale(self) -> int:
 
     @abstractmethod
-    def fit(self, image: Image.Image, prompt: str):
+    def fit(self, image: Image.Image, prompt: str) -> List[torch.FloatTensor]:
+        """
+        Returns attention maps computed at the end of each fitting step.
+        """
         raise NotImplementedError
 
     @abstractmethod

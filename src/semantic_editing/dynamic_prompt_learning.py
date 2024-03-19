@@ -106,7 +106,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # return torch.Tensor([0.0]).to(self.model.device)
 
     def _compute_threshold(self, timestep: int) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        # return (torch.FloatTensor([float("-inf")]).to(self.model.device) for _ in range(3))
         target = lambda t, alpha, beta: math.exp(-timestep / alpha) * beta
         thresh_at = target(
             timestep,
@@ -145,6 +144,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         image = image.resize((self.image_size, self.image_size))
 
         self.latents = ddim_inversion(self.model, image, prompt)
+        n_latents = len(self.latents)
 
         null_embedding = self.model.encode_text(NULL_STRING)
 
@@ -175,18 +175,21 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
         latent_cur = self.latents[-1]
         timesteps = self.model.get_timesteps()
-        n_latents = len(self.latents)
         n_timesteps = len(timesteps)
+
+        # TODO: Remove this assertion and put this in the unittests
+        assert n_latents == n_timesteps + 1
+
         for i in range(n_timesteps):
             t = timesteps[i]
 
             # --------- DPL
-            # TODO: Implement thresholding as per equation 10
+            # Equation 10
             thresh_at, thresh_bg, thresh_dj = self._compute_threshold(i)
 
             # Optimise text tokens w.r.t attention maps
             dpl_optimiser = torch.optim.AdamW(self.model.text_encoder.get_input_embeddings().parameters())
-            for _ in range(self.num_inner_steps_dpl):
+            for j in range(self.num_inner_steps_dpl):
                 # Sample the noise distribution to fill up the attention store
                 prompt_embedding = self.model.encode_text_with_grad(prompt)
                 self.model.get_noise_pred(
@@ -228,14 +231,15 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 else:
                     loss_dj = torch.Tensor([0.0]).to(self.model.device)
 
+                # Equation 10
+                if (thresh_at > loss_at) and (thresh_bg > loss_bg) and (thresh_dj > loss_dj):
+                    self.model.attention_store.reset()
+                    break
+
                 # Equation 9
                 loss_dpl = self.attention_balancing_coeff * loss_at + \
                         self.background_leakage_coeff * loss_bg + \
                         self.disjoint_object_coeff * loss_dj
-
-                if (thresh_at > loss_at) and (thresh_bg > loss_bg) and (thresh_dj > loss_dj):
-                    print("break")
-                    break
 
                 loss_dpl.backward(retain_graph=False)
                 dpl_optimiser.step()
@@ -245,51 +249,61 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 # embeddings that are not in the prompt back to their original values
                 with torch.no_grad():
                     self.model.text_encoder.get_input_embeddings().weight[index_no_updates] = encoder_embeddings[index_no_updates]
-                dpl_attention_maps_list.append(avg_cross_attn_maps.detach())
+                
                 self.model.attention_store.reset()
 
             torch.cuda.empty_cache()
+
             optimised_prompt_noun_embeddings = self.model.text_encoder.get_input_embeddings().weight[~index_no_updates].detach()
             optimised_prompt_noun_embeddings_list.append(optimised_prompt_noun_embeddings)
             
             # --------- NTI
             # Optimise null tokens for reconstructing latents
             null_embedding = null_embedding.clone().detach().requires_grad_(True)
-            prompt_embedding = self.model.encode_text(prompt).clone().detach().requires_grad_(False)
-            lr_scale_factor = 1. - i / 100.  # (n_timesteps * 2)
+            prompt_embedding = self.model.encode_text(prompt).detach().requires_grad_(False)
+
+            lr_scale_factor = 1. - i / (n_timesteps * 2)
             nti_optimiser = Adam([null_embedding], lr=self.learning_rate * lr_scale_factor)
+
             latent_prev = self.latents[n_latents - i - 2]
+
             with torch.no_grad():
-                noise_pred_cond = self.model.get_noise_pred(
+                noise_pred_cond = self.model.get_noise_pred(latent_cur, t, prompt_embedding)
+            for j in range(self.num_inner_steps_nti):
+                # CFG
+                noise_pred_uncond = self.model.get_noise_pred(latent_cur, t, null_embedding)
+                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latent_prev_rec = self.model.prev_step(noise_pred, t, latent_cur)
+                # TODO: Include early stopping condition if loss is similar for n steps
+                # Compute loss between predicted latent and true latent from DDIM inversion
+                loss = F.mse_loss(latent_prev_rec, latent_prev)
+                # Optimise null embedding
+                loss.backward(retain_graph=False)
+                nti_optimiser.step()
+                nti_optimiser.zero_grad()
+            optimised_null_embeddings_list.append(null_embedding[:1].detach())
+            with torch.no_grad():
+                noise_pred_uncond = self.model.get_noise_pred(latent_cur, t, null_embedding)
+                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latent_cur = self.model.prev_step(noise_pred, t, latent_cur)
+
+            # Run a noise prediction to get cross attention maps.
+            self.model.attention_store.reset()
+            with torch.no_grad():
+                self.model.get_noise_pred(
                     latent_cur,
                     t,
                     prompt_embedding,
                     True,
                 )
-            for _ in range(self.num_inner_steps_nti):
-                latent_prev_rec = self._cfg_with_prompt_noise_pred(
-                    latent_cur,
-                    t,
-                    null_embedding,
-                    noise_pred_cond,
-                )
-                loss_nti = F.mse_loss(latent_prev_rec, latent_prev)
-                loss_nti.backward(retain_graph=False)
-                nti_optimiser.step()
-                nti_optimiser.zero_grad()
-                # loss_item = loss_nti.item()
-                # if loss_item < self.epsilon + i * 2e-5:
-                #     break
-            optimised_null_embeddings_list.append(null_embedding[:1].detach())
-            with torch.no_grad():
-                latent_cur = self._cfg_with_prompt_noise_pred(
-                    latent_cur,
-                    t,
-                    null_embedding,
-                    noise_pred_cond,
+                avg_cross_attn_maps = self.model.attention_store.aggregate_attention(
+                    places_in_unet=["up", "down", "mid"],
+                    is_cross=True,
+                    res=self.attention_resolution,
+                    element_name="attn",
                 )
             self.model.attention_store.reset()
-
+            dpl_attention_maps_list.append(avg_cross_attn_maps.detach().cpu())
             torch.cuda.empty_cache()
 
         self.null_embeddings = optimised_null_embeddings_list

@@ -18,8 +18,10 @@ class StableDiffusionAdapter:
         self.model = model
         self.text_encoder = self.model.text_encoder
         self.ddim_steps = ddim_steps
-        self.scheduler = DDIMScheduler()
+        self.scheduler = DDIMScheduler.from_config(self.model.scheduler.config)
         self.scheduler.set_timesteps(self.ddim_steps)
+        self.inverse_scheduler = DDIMInverseScheduler.from_config(self.model.scheduler.config)
+        self.inverse_scheduler.set_timesteps(self.ddim_steps)
         self.tokenizer = self.model.tokenizer
         self.vae = self.model.vae
         self.unet = self.model.unet
@@ -74,29 +76,15 @@ class StableDiffusionAdapter:
         timestep: int,
         latent: torch.FloatTensor,
     ) -> torch.FloatTensor:
-        timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
-        alpha_prod_t = self.scheduler.alphas_cumprod[timestep] if timestep >= 0 else self.scheduler.final_alpha_cumprod
-        alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep]
-        beta_prod_t = 1 - alpha_prod_t
-        next_original_latent = (latent - beta_prod_t ** 0.5 * noise_pred) / alpha_prod_t ** 0.5
-        next_latent_direction = (1 - alpha_prod_t_next) ** 0.5 * noise_pred
-        next_latent = alpha_prod_t_next ** 0.5 * next_original_latent + next_latent_direction
-        return next_latent
+        return self.inverse_scheduler.step(noise_pred, timestep, latent).prev_sample
 
     def prev_step(
         self,
-        model_output: torch.FloatTensor,
+        noise_pred: torch.FloatTensor,
         timestep: int,
         latent: torch.FloatTensor,
     ) -> torch.FloatTensor:
-        prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
-        alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
-        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
-        beta_prod_t = 1 - alpha_prod_t
-        pred_original_latent = (latent - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
-        pred_latent_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
-        prev_latent = alpha_prod_t_prev ** 0.5 * pred_original_latent + pred_latent_direction
-        return prev_latent
+        return self.scheduler.step(noise_pred, timestep, latent).prev_sample
 
     def get_noise_pred(
         self,

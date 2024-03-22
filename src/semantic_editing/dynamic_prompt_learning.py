@@ -62,39 +62,34 @@ class DynamicPromptOptimisation(CFGOptimisation):
     def _loss_attention_balancing(
         self,
         cross_attn_maps: torch.FloatTensor,
-        noun_indices: List[int],
+        indices: List[int],
     ) -> torch.FloatTensor:
-        cross_attn_maps_nouns = cross_attn_maps[:, :, noun_indices]
-        cross_attn_maps_nouns_norm = F.softmax(cross_attn_maps_nouns * 100, dim=-1)
+        # Select cross attention maps corresponding to chosen indices
+        cross_attn_maps_idxs = cross_attn_maps[:, :, indices]
+        # Normalise the cross attention maps
+        cross_attn_maps_idxs_norm = F.softmax(cross_attn_maps_idxs * 100, dim=-1)
+
+        # Initialise smoothing kernel
+        smoothing_kernel = GaussianSmoothing(channels=1, kernel_size=3, sigma=0.5, dim=2).to(self.model.device)
 
         # Equation 8 required cross-attention maps to be passed through
         # Gaussian smoothing filter, as mentioned in Attend-and-Excite paper.
-        loss = torch.FloatTensor([float("-inf")]).to(self.model.device)
-        max_attentions = []
-        for i in range(len(noun_indices)):
-            # cross_attn_map = cross_attn_maps_nouns_norm[:, :, i].unsqueeze(0)
-            image = cross_attn_maps_nouns_norm[:, :, i]
-            smoothing = GaussianSmoothing(channels=1, kernel_size=3, sigma=0.5, dim=2).cuda()
-            _input = F.pad(image.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='reflect')
-            cross_attn_map_smooth = smoothing(_input).squeeze(0).squeeze(0)
-            # cross_attn_map = F.pad(cross_attn_map, pad=(1, 1), mode="reflect")
-            # cross_attn_map_smooth = GaussianSmoothing(channels=1, kernel_size=kernel_size, sigma=sigma, dim=2).cuda()
-            # cross_attn_map_smooth = F_vision.gaussian_blur(
-            #     cross_attn_map,
-            #     kernel_size=(3, 3),
-            #     sigma=(0.5, 0.5),
-            # )
-            # cross_attn_map_smooth = cross_attn_map_smooth.squeeze(0)
-            max_attention_per_noun = cross_attn_map_smooth.max()
-            max_attentions.append(max_attention_per_noun)
-            # # Find the max attention for a noun
-            # curr_max = max(torch.FloatTensor([0.0]).to(self.model.device), 1 - max_attention_per_noun)
-            # # Find the max attention across all nouns
-            # loss = max(curr_max, loss)
-        loss = max([
+        max_attn_per_idx = []
+        for i in range(len(indices)):
+            # Compute the max activation in cross attn map for each of the chosen indices.
+            _map = cross_attn_maps_idxs_norm[:, :, i]
+            padded_map = F.pad(_map.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="reflect")
+            smooth_map = smoothing_kernel(padded_map).squeeze(0).squeeze(0)
+            max_attn = smooth_map.max()
+            max_attn_per_idx.append(max_attn)
+
+        # Compute the loss for each index, as per Equation 8.
+        losses = [
             max(torch.Tensor([0.0]).to(self.model.device), 1 - curr_max)
-            for curr_max in max_attentions
-        ])
+            for curr_max in max_attn_per_idx
+        ]
+        # Compute the loss across all selected cross attention maps
+        loss = max(losses)
         return loss
 
     def _loss_background_leakage(self, cross_attn_maps, bg_map) -> torch.FloatTensor:
@@ -123,18 +118,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
             self.disjoint_object_beta,
         )
         return thresh_at, thresh_bg, thresh_dj
-
-    def _cfg_with_prompt_noise_pred(
-        self,
-        latent_cur: torch.FloatTensor,
-        timestep: torch.IntTensor,
-        null_embedding: torch.FloatTensor,
-        noise_pred_cond: torch.FloatTensor,
-    ) -> torch.FloatTensor:
-        noise_pred_uncond = self.model.get_noise_pred(latent_cur, timestep, null_embedding)
-        noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
-        latent_prev = self.model.prev_step(noise_pred, timestep, latent_cur)
-        return latent_prev
 
     def fit(self, image: Image.Image, prompt: str) -> List[torch.FloatTensor]:
         self.model.attention_store.reset()
@@ -317,7 +300,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "index_no_updates")):
             raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
         
-        # self.model.attention_store.reset()
+        self.model.attention_store.reset()
 
         # TODO: Move this into model adapter
         latent = self.latents[-1].expand(

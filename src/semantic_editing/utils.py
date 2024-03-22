@@ -33,10 +33,11 @@ def init_stable_diffusion(
 def plot_image_on_axis(
     ax: Axes,
     image: Union[Image.Image, np.ndarray],
-    title: str,
+    title: Optional[str] = None,
     fontsize: int = 10,
 ):
-    ax.set_title(title, fontsize=fontsize)
+    if title is not None:
+        ax.set_title(title, fontsize=fontsize)
     ax.imshow(image)
     ax.set_axis_off()
 

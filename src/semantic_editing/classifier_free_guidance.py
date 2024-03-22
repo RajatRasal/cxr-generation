@@ -14,6 +14,7 @@ class CFGWithDDIM(CFGOptimisation):
         guidance_scale: int,
         image_size: Optional[int] = None,
     ):
+        # TODO: Assure attention store
         self.model = model
         self.guidance_scale = guidance_scale
         self.image_size = image_size

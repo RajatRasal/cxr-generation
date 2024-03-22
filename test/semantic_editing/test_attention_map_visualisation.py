@@ -1,84 +1,76 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import torch
-import torch.nn.functional as F
 from PIL import Image
-from sklearn.decomposition import PCA
 
 from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_noun_indices, localise_nouns
 from semantic_editing.utils import plot_image_on_axis
 
 
-def test_visualise_self_attention_maps_pca(
+def test_visualise_attention_maps_pca(
     cfg_ddim,
     image_prompt_cat_and_dog,
-    attention_store,
+    attention_store_accumulate,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
 
-    fig, axes = plt.subplots(nrows=3, ncols=1)
+    fig1, axes1 = plt.subplots(nrows=3, ncols=4)
+    fig2, axes2 = plt.subplots(nrows=3, ncols=4)
+    fig3, axes3 = plt.subplots(nrows=3, ncols=4)
 
-    # PCA for attention maps from inversion
-    for i, res in enumerate([16, 32, 64]):
-        attn_avg = attention_store.aggregate_attention(
-            places_in_unet=["up", "down", "mid"],
-            is_cross=False,
-            res=res,
-            element_name="attn",
-        )
-        proj = attention_map_pca(attn_avg, n_components=3, normalise=True)
-        proj_img = Image.fromarray((proj * 255).astype(np.uint8)) 
-        proj_img = proj_img.resize((512, 512))
-        plot_image_on_axis(axes[i], proj_img, f"{res} x {res}")
-    fig.savefig("ddim_inversion_avg_self_attention_proj.pdf")
-
-    assert False
-
-
-def test_visualise_self_attention_maps_clustering(
-    cfg_ddim,
-    image_prompt_cat_and_dog,
-    attention_store,
-):
-    image, prompt = image_prompt_cat_and_dog
-    cfg_ddim.fit(image, prompt)
-
-    def _plot(alg: str, n_clusters: int, name: str):
-        fig, axes = plt.subplots(nrows=3, ncols=1)
-        for i, res in enumerate([16, 32, 64]):
-            attn_avg = attention_store.aggregate_attention(
+    col_titles = ["Self-Attention", "Query", "Key", "Value"]
+    element_names = ["attn", "query", "key", "value"]
+    res_names = [16, 32, 64]
+    for j, element_name in enumerate(element_names):
+        for i, res in enumerate(res_names):
+            attn_avg = attention_store_accumulate.aggregate_attention(
                 places_in_unet=["up", "down", "mid"],
                 is_cross=False,
                 res=res,
-                element_name="attn",
+                element_name=element_name,
             )
-            clusters = attention_map_cluster(attn_avg, algorithm=alg, n_clusters=n_clusters)
-            plot_image_on_axis(axes[i], clusters, f"{res} x {res}")
-        fig.savefig(name)
+            proj = attention_map_pca(attn_avg, n_components=3, normalise=True)
+            clusters_kmeans = attention_map_cluster(attn_avg, algorithm="kmeans", n_clusters=5)
+            clusters_gmm = attention_map_cluster(attn_avg, algorithm="bgmm", n_clusters=10)
+            proj_img = Image.fromarray((proj * 255).astype(np.uint8)) 
+            proj_img = proj_img.resize((512, 512))
+            title = col_titles[j] if i == 0 else None
+            plot_image_on_axis(axes1[i][j], proj_img, title)
+            plot_image_on_axis(axes2[i][j], clusters_kmeans, title)
+            plot_image_on_axis(axes3[i][j], clusters_gmm, title)
 
-    for alg in ["kmeans", "gmm", "bgmm"]:
-        _plot(alg, 10, f"ddim_inversion_avg_self_attention_clusters_{alg}.pdf")
+    for ax1, res_name in zip(axes1[:, 0], res_names):
+        kwargs = {"x": -100, "y": 400, "s": f"{res_name} x {res_name}", "rotation": 90}
+        ax1.text(**kwargs)
+
+    for ax2, ax3, res_name in zip(axes2[:, 0], axes3[:, 0], res_names):
+        kwargs = {"s": f"{res_name} x {res_name}", "rotation": 90}
+        ax2.text(**kwargs)
+        ax3.text(**kwargs)
+
+    fig1.savefig("ddim_inversion_attn_pca_proj.pdf", bbox_inches="tight")
+    fig2.savefig("ddim_inversion_attn_kmeans.pdf", bbox_inches="tight")
+    fig3.savefig("ddim_inversion_attn_bgmm.pdf", bbox_inches="tight")
 
 
 def test_visualise_cross_attention_maps_nouns_clustering(
     cfg_ddim,
     image_prompt_cat_and_dog,
-    attention_store,
+    attention_store_accumulate,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
 
     noun_indices = find_noun_indices(cfg_ddim.model, prompt)
 
-    self_attn_avg = attention_store.aggregate_attention(
+    self_attn_avg = attention_store_accumulate.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=False,
         res=32,
         element_name="attn",
     )
     clusters = attention_map_cluster(self_attn_avg, "kmeans", n_clusters=10)
-    cross_avg = attention_store.aggregate_attention(
+    cross_avg = attention_store_accumulate.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=True,
         res=16,
@@ -99,7 +91,7 @@ def test_visualise_prompt_localisation(
     sd_adapter_with_attn_excite,
     cfg_ddim,
     image_prompt_cat_and_dog,
-    attention_store,
+    attention_store_accumulate,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
@@ -109,7 +101,7 @@ def test_visualise_prompt_localisation(
     resolutions = [16, 32, 64]
     fig, axes = plt.subplots(nrows=len(resolutions), ncols=len(noun_indices))
     for i, res in enumerate(resolutions):
-        attn_avg = attention_store.aggregate_attention(
+        attn_avg = attention_store_accumulate.aggregate_attention(
             places_in_unet=["up", "down", "mid"],
             is_cross=True,
             res=res,

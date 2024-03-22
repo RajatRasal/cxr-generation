@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pytest
 import torch
 from PIL import Image
 from sklearn.decomposition import PCA
@@ -35,26 +36,30 @@ def _visualise_ca_maps(gen, cross_attn_avg: torch.FloatTensor, prompt: str, file
     save_figure(fig, file_name)
 
 
+def _test(model, image_and_prompt, recon_name, cross_attn_name):
+    image, prompt = image_and_prompt
+    attn_maps = _generate(model, image, prompt, recon_name)
+    attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
+    _visualise_ca_maps(model, attn_maps_avg, prompt, cross_attn_name)
+
+
 def test_dpl_generation_visualisation(
     dpl,
     image_prompt_cat_and_dog,
-    attention_store,
 ):
-    image, prompt = image_prompt_cat_and_dog
-    attn_maps = _generate(dpl, image, prompt, "dpl_reconstruction.pdf")
-    attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
-    _visualise_ca_maps(dpl, attn_maps_avg, prompt, "dpl_avg_cross_attention_maps.pdf")
-    assert False
+    _test(dpl, image_prompt_cat_and_dog, "dpl_reconstruction.pdf", "dpl_avg_cross_attention_maps.pdf")
+
+
+def test_dpl_nti_generation_visualisation(
+    dpl_nti,
+    image_prompt_cat_and_dog,
+):
+    _test(dpl_nti, image_prompt_cat_and_dog, "dpl_nti_reconstruction.pdf", "dpl_nti_avg_cross_attention_maps.pdf")
 
 
 def test_nti_generation_visualisation(
     nti,
     image_prompt_cat_and_dog,
-    attention_store,
 ):
-    image, prompt = image_prompt_cat_and_dog
-    attn_maps = _generate(nti, image, prompt, "nti_reconstruction.pdf")
-    attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
-    _visualise_ca_maps(nti, attn_maps_avg, prompt, "nti_avg_cross_attention_maps.pdf")
-    assert False
+    _test(nti, image_prompt_cat_and_dog, "nti_reconstruction.pdf", "nti_avg_cross_attention_maps.pdf")
 

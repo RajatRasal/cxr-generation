@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 from diffusers import StableDiffusionPipeline
 
-from semantic_editing.attention import AttentionStore, AttendExciteCrossAttnProcessor
+from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttendExciteCrossAttnProcessor
 from semantic_editing.classifier_free_guidance import CFGWithDDIM
 from semantic_editing.diffusion import StableDiffusionAdapter
 from semantic_editing.null_text_inversion import NullTokenOptimisation
@@ -53,15 +53,30 @@ def sd_adapter(sd_model):
 
 
 @pytest.fixture
-def attention_store():
-    return AttentionStore()
+def attention_store_accumulate():
+    return AttentionStoreAccumulate()
 
 
 @pytest.fixture
-def sd_adapter_with_attn_excite(sd_model, attention_store):
+def attention_store_timestep():
+    return AttentionStoreTimestep()
+
+
+@pytest.fixture
+def sd_adapter_with_attn_accumulate(sd_model, attention_store_accumulate):
     adapter = StableDiffusionAdapter(sd_model, ddim_steps=50)
     adapter.register_attention_control(
-        attention_store,
+        attention_store_accumulate,
+        AttendExciteCrossAttnProcessor,
+    )
+    return adapter
+
+
+@pytest.fixture
+def sd_adapter_with_attn_timestep(sd_model, attention_store_timestep):
+    adapter = StableDiffusionAdapter(sd_model, ddim_steps=50)
+    adapter.register_attention_control(
+        attention_store_timestep,
         AttendExciteCrossAttnProcessor,
     )
     return adapter
@@ -84,13 +99,13 @@ def image_prompt_girl_and_boy_trampoline():
 
 
 @pytest.fixture
-def dpl(sd_adapter_with_attn_excite):
+def dpl(sd_adapter_with_attn_timestep):
     return DynamicPromptOptimisation(
-        sd_adapter_with_attn_excite,
+        sd_adapter_with_attn_timestep,
         guidance_scale=7.5,
-        num_inner_steps_dpl=25,
+        num_inner_steps_dpl=20,
         num_inner_steps_nti=50,
-        attention_balancing_coeff=0,
+        attention_balancing_coeff=1,
         attention_balancing_alpha=25,
         attention_balancing_beta=0.3,
         disjoint_object_coeff=0,
@@ -99,20 +114,33 @@ def dpl(sd_adapter_with_attn_excite):
 
 
 @pytest.fixture
-def nti(sd_adapter_with_attn_excite):
+def dpl_nti(sd_adapter_with_attn_timestep):
+    return DynamicPromptOptimisation(
+        sd_adapter_with_attn_timestep,
+        guidance_scale=7.5,
+        num_inner_steps_dpl=20,
+        num_inner_steps_nti=20,
+        attention_balancing_coeff=0,
+        disjoint_object_coeff=0,
+        background_leakage_coeff=0,
+    )
+
+
+@pytest.fixture
+def nti(sd_adapter_with_attn_timestep):
     return NullTokenOptimisation(
-        sd_adapter_with_attn_excite,
+        sd_adapter_with_attn_timestep,
         guidance_scale=7.5,
         num_inner_steps=50,
     )
 
 
-@pytest.fixture
-def pti(sd_adapter):
-    return PromptTokenOptimisation(sd_adapter, guidance_scale=7.5, num_inner_steps=20)
+# @pytest.fixture
+# def pti(sd_adapter):
+#     return PromptTokenOptimisation(sd_adapter, guidance_scale=7.5, num_inner_steps=20)
 
 
 @pytest.fixture
-def cfg_ddim(sd_adapter_with_attn_excite):
-    return CFGWithDDIM(sd_adapter_with_attn_excite, guidance_scale=1, image_size=512)
+def cfg_ddim(sd_adapter_with_attn_accumulate):
+    return CFGWithDDIM(sd_adapter_with_attn_accumulate, guidance_scale=1, image_size=512)
 

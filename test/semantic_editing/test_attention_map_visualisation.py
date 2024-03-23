@@ -45,7 +45,7 @@ def test_visualise_attention_maps_pca(
         ax1.text(**kwargs)
 
     for ax2, ax3, res_name in zip(axes2[:, 0], axes3[:, 0], res_names):
-        kwargs = {"s": f"{res_name} x {res_name}", "rotation": 90}
+        kwargs = {"x": -100, "y": 400, "s": f"{res_name} x {res_name}", "rotation": 90}
         ax2.text(**kwargs)
         ax3.text(**kwargs)
 
@@ -63,17 +63,48 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
 
+    # Self-Attention
+    self_attn_avg = attention_store_accumulate.aggregate_attention(
+        places_in_unet=["up", "down", "mid"],
+        is_cross=False,
+        res=32,
+        element_name="attn",
+    )
+    self_attn_avg_proj = attention_map_pca(self_attn_avg, n_components=3, normalise=True)
+    self_attn_avg_clusters = attention_map_cluster(self_attn_avg, algorithm="kmeans", n_clusters=5)
+
+    # Cross-Attention
+    cross_attn_avg = attention_store_accumulate.aggregate_attention(
+        places_in_unet=["up", "down", "mid"],
+        is_cross=True,
+        res=16,
+        element_name="attn",
+    )
+
+    # Object masks
     noun_indices = find_noun_indices(cfg_ddim.model, prompt)
     masks = find_masks(
         attention_store_accumulate,
         noun_indices,
     )
-    masks = {k: Image.fromarray((v * 255).astype(np.uint8)) for k, v in masks.items()}
+    masks = {k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8)) for k, v in masks.items()}
 
-    fig, axes = plt.subplots(nrows=1, ncols=len(masks), figsize=(15, 5))
-    plot_image_on_axis(axes[0], masks["BG"], "Background")
+    # (original, self-attn, self-attn cluster, cross-attn cat, cross-attn dog, background, foreground cat, foreground dog)
+    fig, axes = plt.subplots(nrows=1, ncols=8, figsize=(15, 5))
+
+    plot_image_on_axis(axes[0], image, "Original")
+    plot_image_on_axis(axes[1], self_attn_avg_proj, "Self-Attn")
+    plot_image_on_axis(axes[2], self_attn_avg_clusters, "Self-Attn Clusters")
+
+    noun_base_index = 3
+    for i, (noun_index, noun) in enumerate(noun_indices):
+        plot_image_on_axis(axes[noun_base_index + i], cross_attn_avg[:, :, noun_index].cpu().numpy(), f"Cross-Attn: {noun.capitalize()}")
+
+    background_index = 5
+    plot_image_on_axis(axes[background_index], masks["BG"], "Background")
     del masks["BG"]
     for i, (k, v) in enumerate(masks.items()):
-        plot_image_on_axis(axes[i + 1], v, k.capitalize())
-    save_figure(fig, "ddim_inversion_object_masks.pdf")
+        plot_image_on_axis(axes[background_index + i + 1], v, f"Foreground: {k.capitalize()}")
+
+    save_figure(fig, "ddim_inversion_attn_maps.pdf")
 

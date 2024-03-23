@@ -153,7 +153,6 @@ class AttentionStoreAccumulate(AttentionStore):
                 self.attention_store[key] = value
             else:
                 self.attention_store[key] += value
-        self.attention_store = self.step_store
         self.step_store = self.get_empty_store()
     
     def get_average_attention(self):

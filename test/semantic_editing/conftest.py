@@ -16,8 +16,6 @@ from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.utils import seed_everything
 
 
-plt.rcParams["image.cmap"] = "jet"
-
 SEED = 0
 STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
 # STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
@@ -25,6 +23,11 @@ STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
 @pytest.fixture(autouse=True)
 def initialise_random_seeds():
     seed_everything(SEED)
+
+
+@pytest.fixture
+def jet_cmap():
+    plt.set_cmap("jet")
 
 
 @pytest.fixture
@@ -99,7 +102,7 @@ def image_prompt_girl_and_boy_trampoline():
 
 
 @pytest.fixture
-def dpl(sd_adapter_with_attn_timestep):
+def dpl_1(sd_adapter_with_attn_timestep):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
         guidance_scale=7.5,
@@ -110,6 +113,44 @@ def dpl(sd_adapter_with_attn_timestep):
         attention_balancing_beta=0.3,
         disjoint_object_coeff=0,
         background_leakage_coeff=0,
+    )
+
+
+@pytest.fixture
+def dpl_2(sd_adapter_with_attn_timestep):
+    return DynamicPromptOptimisation(
+        sd_adapter_with_attn_timestep,
+        guidance_scale=7.5,
+        num_inner_steps_dpl=20,
+        num_inner_steps_nti=50,
+        attention_balancing_coeff=1,
+        attention_balancing_alpha=25,
+        attention_balancing_beta=0.3,
+        disjoint_object_coeff=0.05,
+        disjoint_object_alpha=25,
+        disjoint_object_beta=0.9,
+        background_leakage_coeff=0,
+    )
+
+
+@pytest.fixture
+def dpl_3(sd_adapter_with_attn_timestep):
+    return DynamicPromptOptimisation(
+        sd_adapter_with_attn_timestep,
+        guidance_scale=7.5,
+        num_inner_steps_dpl=20,
+        num_inner_steps_nti=50,
+        attention_balancing_coeff=1,
+        attention_balancing_alpha=25,
+        attention_balancing_beta=0.3,
+        disjoint_object_coeff=0.05,
+        disjoint_object_alpha=25,
+        disjoint_object_beta=0.9,
+        background_leakage_coeff=0.05,
+        background_leakage_alpha=50,
+        background_leakage_beta=0.7,
+        max_clusters=20,
+        algorithm="kmeans",
     )
 
 

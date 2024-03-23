@@ -15,7 +15,7 @@ from semantic_editing.base import CFGOptimisation, NULL_STRING
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
 from semantic_editing.utils import seed_everything, init_stable_diffusion, plot_image_on_axis
-from semantic_editing.tools import background_mask, find_noun_indices
+from semantic_editing.tools import CLUSTERING_ALGORITHM, background_mask, find_noun_indices
 
 
 class DynamicPromptOptimisation(CFGOptimisation):
@@ -39,6 +39,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         background_leakage_coeff: float = 0.1,
         background_leakage_alpha: float = 50,
         background_leakage_beta: float = 0.7,
+        clustering_algorithm: CLUSTERING_ALGORITHM = "kmeans",
+        max_clusters: int = 5
     ):
         self.model = model
         self.guidance_scale = guidance_scale
@@ -59,6 +61,9 @@ class DynamicPromptOptimisation(CFGOptimisation):
         self.background_leakage_alpha = background_leakage_alpha
         self.background_leakage_beta = background_leakage_beta
 
+        self.clustering_algorithm = clustering_algorithm
+        self.max_clusters = max_clusters
+
     def _loss_attention_balancing(
         self,
         cross_attn_maps: torch.FloatTensor,
@@ -70,6 +75,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         cross_attn_maps_idxs_norm = F.softmax(cross_attn_maps_idxs * 100, dim=-1)
 
         # Initialise smoothing kernel
+        # TODO: pass gaussian smoothing hyperparameters (kernel_size, sigma) into constructor
         smoothing_kernel = GaussianSmoothing(channels=1, kernel_size=3, sigma=0.5, dim=2).to(self.model.device)
 
         # Equation 8 required cross-attention maps to be passed through
@@ -78,6 +84,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         for i in range(len(indices)):
             # Compute the max activation in cross attn map for each of the chosen indices.
             _map = cross_attn_maps_idxs_norm[:, :, i]
+            # TODO: pass padding hyperparameters into constructor
             padded_map = F.pad(_map.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="reflect")
             smooth_map = smoothing_kernel(padded_map).squeeze(0).squeeze(0)
             max_attn = smooth_map.max()
@@ -92,13 +99,27 @@ class DynamicPromptOptimisation(CFGOptimisation):
         loss = max(losses)
         return loss
 
-    def _loss_background_leakage(self, cross_attn_maps, bg_map) -> torch.FloatTensor:
-        raise NotImplementedError
-        # return torch.Tensor([0.0]).to(self.model.device)
+    def _loss_background_leakage(
+        self,
+        cross_attn_maps: torch.FloatTensor,
+        indices: List[int],
+        bg_map: torch.FloatTensor,
+    ) -> torch.FloatTensor:
+        flat_cross_attn_maps = cross_attn_maps[:, :, indices].view(-1, len(indices)).t()
+        bg_map = bg_map.flatten().unsqueeze(0)
+        return F.cosine_similarity(flat_cross_attn_maps, bg_map).mean()
 
-    def _loss_disjoint_object(self, cross_attn_maps, noun_indices) -> torch.FloatTensor:
-        raise NotImplementedError
-        # return torch.Tensor([0.0]).to(self.model.device)
+    def _loss_disjoint_object(
+        self,
+        cross_attn_maps: torch.FloatTensor,
+        indices: List[int],
+    ) -> torch.FloatTensor:
+        n_indices = len(indices)
+        flat_cross_attn_map = cross_attn_maps[:, :, indices].view(-1, n_indices).t()
+        cosine_mask = torch.tril(torch.ones((n_indices, n_indices)), diagonal=-1).bool()
+        cosine_sim = F.cosine_similarity(flat_cross_attn_map[:, :, None], flat_cross_attn_map.t()[None, :, :])
+        cosine_dist = cosine_sim[cosine_mask].mean()
+        return cosine_dist
 
     def _compute_threshold(self, timestep: int) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         target = lambda t, alpha, beta: math.exp(-timestep / alpha) * beta
@@ -135,9 +156,20 @@ class DynamicPromptOptimisation(CFGOptimisation):
         prompt_embedding = self.model.encode_text(prompt)
         index_noun_pairs = find_noun_indices(self.model, prompt)
         noun_indices = [i for i, _ in index_noun_pairs]
-        # TODO: Use localise_nouns here
-        bg_maps = background_mask(self.model.attention_store, index_noun_pairs)
-        self.model.attention_store.reset()
+
+        if self.background_leakage_coeff > 0:
+            bg_map = background_mask(
+                self.model.attention_store,
+                index_noun_pairs,
+                algorithm=self.clustering_algorithm,
+                n_clusters=self.max_clusters,
+            )
+            self.model.attention_store.reset()
+            bg_map = F.interpolate(
+                bg_map.float().unsqueeze(0).unsqueeze(0),
+                size=self.attention_resolution,
+                mode="bilinear",
+            ).squeeze(0)
 
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
@@ -201,7 +233,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 if self.background_leakage_coeff > 0:
                     loss_bg = self._loss_background_leakage(
                         avg_cross_attn_maps,
-                        bg_maps,
+                        noun_indices,
+                        bg_map,
                     )
                 else:
                     loss_bg = torch.Tensor([0.0]).to(self.model.device)

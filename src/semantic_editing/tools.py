@@ -12,6 +12,8 @@ from semantic_editing.diffusion import StableDiffusionAdapter
 from semantic_editing.attention import AttentionStore
 
 
+CLUSTERING_ALGORITHM = Literal["kmeans", "gmm", "bgmm"]
+
 def normalise_image(image: np.ndarray) -> np.ndarray:
     shape = image.shape
     assert len(shape) == 3 and shape[0] == shape[1]
@@ -74,7 +76,7 @@ def attention_map_pca(
 
 def attention_map_cluster(
     attn_map: torch.FloatTensor,
-    algorithm: Literal["kmeans", "gmm", "bgmm"],
+    algorithm: CLUSTERING_ALGORITHM,
     n_clusters: int = 5,
     **clustering_kwargs,
 ) -> np.ndarray:
@@ -141,12 +143,18 @@ def find_noun_indices(model: StableDiffusionAdapter, prompt: str) -> List[Tuple[
 
 def localise_nouns(
     clusters: np.ndarray,
-    cross_attention: np.ndarray,
+    cross_attention: torch.FloatTensor,  # np.ndarray,
     index_noun_pairs: List[Tuple[int, str]],
     background_threshold: int = 0.2,
-) -> Dict[str, np.ndarray]:
+) -> Dict[str, torch.FloatTensor]:  # np.ndarray]:
     scale = clusters.shape[0] / cross_attention.shape[0]
-    assert scale > 1
+    if scale < 1:
+        raise ValueError(f"Dimensionality of clusters must be greater than cross_attention (dim(clusters) = {clusters.shape[0]} < dim(cross_attention) = {cross_attention.shape[0]})")
+    if cross_attention.shape[0] % clusters.shape[0] == 0:
+        raise ValueError(f"dim(cross_attention) = {cross_attention.shape[0]} must be a scale factor of dim(clusters) = {clusters.shape[0]}")
+
+    device = cross_attention.device
+    cross_attention = cross_attention.cpu().numpy()
 
     noun_names = [n for _, n in index_noun_pairs]
     noun_indices = [i for i, _ in index_noun_pairs]
@@ -189,21 +197,26 @@ def localise_nouns(
         else:
             masks[c] += cluster_mask
 
-    return masks
+    if "BG" not in masks:
+        raise ValueError("Background not found in masks, retry with another different hyperparameters or use a different algorithm.")
+
+    return {label: torch.tensor(mask).to(device) for label, mask in masks.items()}
 
 
-def background_mask(
+def find_masks(
     attention_store: AttentionStore,
     index_noun_pairs: List[Tuple[int, str]],
     background_threshold: float = 0.2,
-) -> torch.FloatTensor:
+    algorithm: CLUSTERING_ALGORITHM = "kmeans",
+    n_clusters: int = 5,
+) -> Dict[str, torch.FloatTensor]:
     attn_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=False,
         res=32,
         element_name="attn",
     )
-    clusters = attention_map_cluster(attn_avg, algorithm="kmeans", n_clusters=5)
+    clusters = attention_map_cluster(attn_avg, algorithm=algorithm, n_clusters=n_clusters)
 
     cross_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
@@ -213,8 +226,26 @@ def background_mask(
     )
     masks = localise_nouns(
         clusters,
-        cross_avg.cpu().numpy(),
+        cross_avg,
         index_noun_pairs,
         background_threshold,
     )
+    return masks
+
+
+def background_mask(
+    attention_store: AttentionStore,
+    index_noun_pairs: List[Tuple[int, str]],
+    background_threshold: float = 0.2,
+    algorithm: CLUSTERING_ALGORITHM = "kmeans",
+    n_clusters: int = 5,
+) -> torch.FloatTensor:
+    masks = find_masks(
+        attention_store,
+        index_noun_pairs,
+        background_threshold,
+        algorithm,
+        n_clusters,
+    )
     return masks["BG"]
+

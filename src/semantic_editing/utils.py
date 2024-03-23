@@ -46,3 +46,4 @@ def save_figure(fig: Figure, name: str):
     if not name.endswith(".pdf"):
         raise ValueError("Figure name must end with '.pdf'")
     fig.savefig(name, bbox_inches="tight")
+

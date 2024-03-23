@@ -43,23 +43,58 @@ def _test(model, image_and_prompt, recon_name, cross_attn_name):
     _visualise_ca_maps(model, attn_maps_avg, prompt, cross_attn_name)
 
 
-def test_dpl_generation_visualisation(
-    dpl,
+def test_dpl_cross_attn_visualisation(
+    dpl_3,
     image_prompt_cat_and_dog,
+    jet_cmap,
 ):
-    _test(dpl, image_prompt_cat_and_dog, "dpl_reconstruction.pdf", "dpl_avg_cross_attention_maps.pdf")
+    _test(dpl_3, image_prompt_cat_and_dog, "dpl_reconstruction.pdf", "dpl_avg_cross_attention_maps.pdf")
 
 
-def test_dpl_nti_generation_visualisation(
+def test_dpl_nti_cross_attn_visualisation(
     dpl_nti,
     image_prompt_cat_and_dog,
+    jet_cmap,
 ):
     _test(dpl_nti, image_prompt_cat_and_dog, "dpl_nti_reconstruction.pdf", "dpl_nti_avg_cross_attention_maps.pdf")
 
 
-def test_nti_generation_visualisation(
+def test_nti_cross_attn_visualisation(
     nti,
     image_prompt_cat_and_dog,
+    jet_cmap,
 ):
     _test(nti, image_prompt_cat_and_dog, "nti_reconstruction.pdf", "nti_avg_cross_attention_maps.pdf")
+
+
+def test_dpl_losses_cross_attn_visualisation(
+    dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap,
+):
+    models = [dpl_1, dpl_2, dpl_3]
+    image, prompt = image_prompt_cat_and_dog
+
+    assert dpl_1.model == dpl_2.model == dpl_3.model
+
+    # Get tokens
+    tokens = stable_diffusion_tokens(dpl_1.model, prompt, include_separators=True)
+    n_tokens = len(tokens)
+
+    fig, axes = plt.subplots(nrows=len(models), ncols=n_tokens, figsize=(15, 5))
+    for i, dpl in enumerate(models):
+        attn_res = dpl.attention_resolution
+        # Fit model and get attention maps
+        cross_attn_avgs = dpl.fit(image, prompt)
+        cross_attn_avgs = torch.cat([attn_map.unsqueeze(0) for attn_map in cross_attn_avgs], dim=0).mean(0)
+        # shape = (res, res, n_tokens)
+        cross_attn_avgs = cross_attn_avgs[:, :, :n_tokens].cpu().detach()
+        # shape = (size, size, n_tokens)
+        cross_attn_avgs_upsampled = attention_map_upsample(cross_attn_avgs, attn_res ** 2, "bilinear")
+        for j, token in enumerate(tokens):
+            # shape = (size, size, 1)
+            attn_map = cross_attn_avgs_upsampled[:, :, i].unsqueeze(-1).numpy()
+            assert attn_map.shape == (attn_res ** 2, attn_res ** 2, 1)
+            norm_attn_map = normalise_image(attn_map)
+            title = token if j == 0 else None
+            plot_image_on_axis(axes[i, j], norm_attn_map, title, fontsize=10)
+    save_figure(fig, "dpl_losses_cross_attention_comparison.pdf")
 

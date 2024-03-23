@@ -161,7 +161,7 @@ class AttentionStoreAccumulate(AttentionStore):
         # length and don't assume that cur_step = 50
         cur_step = 50.0
         average_attention = {
-            key: None if item is None else item / cur_step  # self._cur_step_index
+            key: None if item is None else item / cur_step
             for key, item in self.attention_store.items()
         }
         return average_attention

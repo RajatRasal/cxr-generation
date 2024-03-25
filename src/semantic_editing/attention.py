@@ -15,7 +15,7 @@ ATTENTION_COMPONENT = Literal["attn", "feat", "query", "key", "value"]
 class AttentionStore(ABC):
 
     def __init__(self):
-        self._num_att_layers = -1
+        self._num_att_layers = 0
         self.reset()
 
     @staticmethod
@@ -64,6 +64,8 @@ class AttentionStore(ABC):
         element_name: ATTENTION_COMPONENT,
     ) -> torch.FloatTensor:
         """Aggregates the attention across the different layers and heads at the specified resolution."""
+        assert self._cur_att_layer == 0, "Aggregate attention should only be called between diffusion steps"
+
         out = []
         num_pixels = res ** 2
         attention_maps = self.get_average_attention()
@@ -72,8 +74,12 @@ class AttentionStore(ABC):
             item = attention_maps[dict_key]
             if item is None:
                 continue
-            cross_maps = item.reshape(-1, res, res, item.shape[-1])
-            out.append(cross_maps)
+            # TODO: Remove this nasty hack. Push this down into each child class.
+            if isinstance(item, list):
+                for x in item:
+                    out.append(x.reshape(-1, res, res, x.shape[-1]))
+            else:
+                out.append(item.reshape(-1, res, res, item.shape[-1]))
         if len(out) > 0:
             out = torch.cat(out, dim=0)
             out = out.sum(0) / out.shape[0]
@@ -105,7 +111,10 @@ class AttentionStoreTimestep(AttentionStore):
     ):
         res = int(math.sqrt(attn.shape[1]))
         dict_key = self._attention_store_key_string(place_in_unet, is_cross, "attn", res)
-        self.step_store[dict_key] = attn
+        if self.step_store[dict_key] is None:
+            self.step_store[dict_key] = [attn]
+        else:
+            self.step_store[dict_key].append(attn)
 
         self._cur_att_layer += 1
         if self._cur_att_layer == self._num_att_layers:

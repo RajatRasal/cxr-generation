@@ -209,6 +209,7 @@ def find_masks(
     background_threshold: float = 0.2,
     algorithm: CLUSTERING_ALGORITHM = "kmeans",
     n_clusters: int = 5,
+    **clustering_kwargs,
 ) -> Dict[str, torch.FloatTensor]:
     attn_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
@@ -216,7 +217,7 @@ def find_masks(
         res=32,
         element_name="attn",
     )
-    clusters = attention_map_cluster(attn_avg, algorithm=algorithm, n_clusters=n_clusters)
+    clusters = attention_map_cluster(attn_avg, algorithm=algorithm, n_clusters=n_clusters, **clustering_kwargs)
 
     cross_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
@@ -239,6 +240,7 @@ def background_mask(
     background_threshold: float = 0.2,
     algorithm: CLUSTERING_ALGORITHM = "kmeans",
     n_clusters: int = 5,
+    **clustering_kwargs,
 ) -> torch.FloatTensor:
     masks = find_masks(
         attention_store,
@@ -246,6 +248,7 @@ def background_mask(
         background_threshold,
         algorithm,
         n_clusters,
+        **clustering_kwargs,
     )
     return masks["BG"]
 

@@ -17,6 +17,10 @@ from semantic_editing.utils import seed_everything
 
 
 SEED = 0
+DDIM_STEPS = 50
+GUIDANCE_SCALE_CFG = 7.5
+DPL_STEPS = 20
+DPL_NTI_STEPS = 50
 STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
 # STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
 
@@ -32,13 +36,14 @@ def jet_cmap():
 
 @pytest.fixture
 def generator():
+    # TODO: Set cuda as a variable
     generator = torch.Generator("cuda")
     generator.manual_seed(SEED)
     return generator
 
 
-@pytest.fixture
 def sd_model():
+    # TODO: Set cuda as a variable
     model = StableDiffusionPipeline.from_pretrained(
         STABLE_DIFFUSION_VERSION,
 	    torch_dtype=torch.float32,
@@ -50,9 +55,14 @@ def sd_model():
     return model
 
 
+def sd_adapter():
+    model = sd_model()
+    return StableDiffusionAdapter(model, ddim_steps=DDIM_STEPS)
+
+
 @pytest.fixture
-def sd_adapter(sd_model):
-    return StableDiffusionAdapter(sd_model, ddim_steps=50)
+def sd_adapter_fixture():
+    return sd_adapter()
 
 
 @pytest.fixture
@@ -66,8 +76,8 @@ def attention_store_timestep():
 
 
 @pytest.fixture
-def sd_adapter_with_attn_accumulate(sd_model, attention_store_accumulate):
-    adapter = StableDiffusionAdapter(sd_model, ddim_steps=50)
+def sd_adapter_with_attn_accumulate(attention_store_accumulate):
+    adapter = sd_adapter()
     adapter.register_attention_control(
         attention_store_accumulate,
         AttendExciteCrossAttnProcessor,
@@ -76,8 +86,8 @@ def sd_adapter_with_attn_accumulate(sd_model, attention_store_accumulate):
 
 
 @pytest.fixture
-def sd_adapter_with_attn_timestep(sd_model, attention_store_timestep):
-    adapter = StableDiffusionAdapter(sd_model, ddim_steps=50)
+def sd_adapter_with_attn_timestep(attention_store_timestep):
+    adapter = sd_adapter()
     adapter.register_attention_control(
         attention_store_timestep,
         AttendExciteCrossAttnProcessor,
@@ -102,12 +112,13 @@ def image_prompt_girl_and_boy_trampoline():
 
 
 @pytest.fixture
-def dpl_1(sd_adapter_with_attn_timestep):
+def dpl_1(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
-        guidance_scale=7.5,
-        num_inner_steps_dpl=20,
-        num_inner_steps_nti=50,
+        sd_adapter_with_attn_accumulate,
+        guidance_scale=GUIDANCE_SCALE_CFG,
+        num_inner_steps_dpl=DPL_STEPS,
+        num_inner_steps_nti=DPL_NTI_STEPS,
         attention_balancing_coeff=1,
         attention_balancing_alpha=25,
         attention_balancing_beta=0.3,
@@ -117,12 +128,13 @@ def dpl_1(sd_adapter_with_attn_timestep):
 
 
 @pytest.fixture
-def dpl_2(sd_adapter_with_attn_timestep):
+def dpl_2(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
-        guidance_scale=7.5,
-        num_inner_steps_dpl=20,
-        num_inner_steps_nti=50,
+        sd_adapter_with_attn_accumulate,
+        guidance_scale=GUIDANCE_SCALE_CFG,
+        num_inner_steps_dpl=DPL_STEPS,
+        num_inner_steps_nti=DPL_NTI_STEPS,
         attention_balancing_coeff=1,
         attention_balancing_alpha=25,
         attention_balancing_beta=0.3,
@@ -134,23 +146,24 @@ def dpl_2(sd_adapter_with_attn_timestep):
 
 
 @pytest.fixture
-def dpl_3(sd_adapter_with_attn_timestep):
+def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
-        guidance_scale=7.5,
-        num_inner_steps_dpl=20,
-        num_inner_steps_nti=50,
-        attention_balancing_coeff=1,
+        sd_adapter_with_attn_accumulate,
+        guidance_scale=GUIDANCE_SCALE_CFG,
+        num_inner_steps_dpl=DPL_STEPS,
+        num_inner_steps_nti=DPL_NTI_STEPS,
+        attention_balancing_coeff=1.0,
         attention_balancing_alpha=25,
         attention_balancing_beta=0.3,
+        background_leakage_coeff=0.05,
+        background_leakage_alpha=50,
+        background_leakage_beta=0.9,
         disjoint_object_coeff=0.05,
         disjoint_object_alpha=25,
         disjoint_object_beta=0.9,
-        background_leakage_coeff=0.05,
-        background_leakage_alpha=50,
-        background_leakage_beta=0.7,
-        max_clusters=20,
-        algorithm="kmeans",
+        max_clusters=5,
+        clustering_algorithm="kmeans",
     )
 
 
@@ -158,9 +171,9 @@ def dpl_3(sd_adapter_with_attn_timestep):
 def dpl_nti(sd_adapter_with_attn_timestep):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
-        guidance_scale=7.5,
-        num_inner_steps_dpl=20,
-        num_inner_steps_nti=20,
+        guidance_scale=GUIDANCE_SCALE_CFG,
+        num_inner_steps_dpl=DPL_STEPS,
+        num_inner_steps_nti=DPL_NTI_STEPS,
         attention_balancing_coeff=0,
         disjoint_object_coeff=0,
         background_leakage_coeff=0,
@@ -171,8 +184,8 @@ def dpl_nti(sd_adapter_with_attn_timestep):
 def nti(sd_adapter_with_attn_timestep):
     return NullTokenOptimisation(
         sd_adapter_with_attn_timestep,
-        guidance_scale=7.5,
-        num_inner_steps=50,
+        guidance_scale=GUIDANCE_SCALE_CFG,
+        num_inner_steps=DPL_NTI_STEPS,
     )
 
 

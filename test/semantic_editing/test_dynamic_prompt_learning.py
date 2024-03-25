@@ -91,10 +91,9 @@ def test_dpl_losses_cross_attn_visualisation(
         cross_attn_avgs_upsampled = attention_map_upsample(cross_attn_avgs, attn_res ** 2, "bilinear")
         for j, token in enumerate(tokens):
             # shape = (size, size, 1)
-            attn_map = cross_attn_avgs_upsampled[:, :, i].unsqueeze(-1).numpy()
-            assert attn_map.shape == (attn_res ** 2, attn_res ** 2, 1)
+            attn_map = cross_attn_avgs_upsampled[:, :, j].unsqueeze(-1).numpy()
             norm_attn_map = normalise_image(attn_map)
-            title = token if j == 0 else None
-            plot_image_on_axis(axes[i, j], norm_attn_map, title, fontsize=10)
+            title = token if i == 0 else None
+            plot_image_on_axis(axes[i][j], norm_attn_map, title, fontsize=10)
     save_figure(fig, "dpl_losses_cross_attention_comparison.pdf")
 

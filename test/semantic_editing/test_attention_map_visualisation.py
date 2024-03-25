@@ -1,8 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
+import torch.nn.functional as F
 from PIL import Image
 
-from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_masks, find_noun_indices, localise_nouns
+from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_masks, find_noun_indices, localise_nouns, background_mask
 from semantic_editing.utils import plot_image_on_axis, save_figure
 
 
@@ -71,7 +73,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         element_name="attn",
     )
     self_attn_avg_proj = attention_map_pca(self_attn_avg, n_components=3, normalise=True)
-    self_attn_avg_clusters = attention_map_cluster(self_attn_avg, algorithm="kmeans", n_clusters=5)
+    self_attn_avg_clusters = attention_map_cluster(self_attn_avg, algorithm="kmeans", n_clusters=5, random_state=0)
 
     # Cross-Attention
     cross_attn_avg = attention_store_accumulate.aggregate_attention(
@@ -86,11 +88,17 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     masks = find_masks(
         attention_store_accumulate,
         noun_indices,
+        0.2,
+        "kmeans",
+        5,
+        random_state=0,
     )
     masks = {k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8)) for k, v in masks.items()}
 
     # (original, self-attn, self-attn cluster, cross-attn cat, cross-attn dog, background, foreground cat, foreground dog)
-    fig, axes = plt.subplots(nrows=1, ncols=8, figsize=(15, 5))
+    fig, axes = plt.subplots(nrows=1, ncols=9, figsize=(15, 5))
+
+    plot_image_on_axis(axes[-1], Image.fromarray((bg_mask.cpu().numpy() * 255).astype(np.uint8)), "BG MASK 2")
 
     plot_image_on_axis(axes[0], image, "Original")
     plot_image_on_axis(axes[1], self_attn_avg_proj, "Self-Attn")

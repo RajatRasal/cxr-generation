@@ -11,6 +11,7 @@ from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeli
 from torch.optim import Adam
 from tqdm import tqdm
 
+from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep
 from semantic_editing.base import CFGOptimisation, NULL_STRING
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
@@ -23,6 +24,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
     def __init__(
         self,
         model: StableDiffusionAdapter,
+        model_ddim: StableDiffusionAdapter,
         guidance_scale: int,
         num_inner_steps_dpl: int = 50,
         num_inner_steps_nti: int = 20,
@@ -43,6 +45,10 @@ class DynamicPromptOptimisation(CFGOptimisation):
         max_clusters: int = 5
     ):
         self.model = model
+        assert isinstance(self.model.attention_store, AttentionStoreTimestep)
+        self.model_ddim = model_ddim
+        assert isinstance(self.model_ddim.attention_store, AttentionStoreAccumulate)
+
         self.guidance_scale = guidance_scale
         self.num_inner_steps_dpl = num_inner_steps_dpl
         self.num_inner_steps_nti = num_inner_steps_nti
@@ -69,10 +75,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         cross_attn_maps: torch.FloatTensor,
         indices: List[int],
     ) -> torch.FloatTensor:
-        # Select cross attention maps corresponding to chosen indices
-        cross_attn_maps_idxs = cross_attn_maps[:, :, indices]
-        # Normalise the cross attention maps
-        cross_attn_maps_idxs_norm = F.softmax(cross_attn_maps_idxs * 100, dim=-1)
+        cross_attn_maps_norm = F.softmax(cross_attn_maps[:, :, 1:-1] * 100, dim=-1)
 
         # Initialise smoothing kernel
         # TODO: pass gaussian smoothing hyperparameters (kernel_size, sigma) into constructor
@@ -81,11 +84,11 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Equation 8 required cross-attention maps to be passed through
         # Gaussian smoothing filter, as mentioned in Attend-and-Excite paper.
         max_attn_per_idx = []
-        for i in range(len(indices)):
+        for i in indices:
             # Compute the max activation in cross attn map for each of the chosen indices.
-            _map = cross_attn_maps_idxs_norm[:, :, i]
+            idx_map = cross_attn_maps_norm[:, :, i - 1]
             # TODO: pass padding hyperparameters into constructor
-            padded_map = F.pad(_map.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="reflect")
+            padded_map = F.pad(idx_map.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="reflect")
             smooth_map = smoothing_kernel(padded_map).squeeze(0).squeeze(0)
             max_attn = smooth_map.max()
             max_attn_per_idx.append(max_attn)
@@ -122,19 +125,16 @@ class DynamicPromptOptimisation(CFGOptimisation):
         return cosine_dist
 
     def _compute_threshold(self, timestep: int) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        target = lambda t, alpha, beta: math.exp(-timestep / alpha) * beta
-        thresh_at = target(
-            timestep,
+        thresh_func = lambda alpha, beta: math.exp(-timestep / alpha) * beta
+        thresh_at = thresh_func(
             self.attention_balancing_alpha,
             self.attention_balancing_beta,
         )
-        thresh_bg = target(
-            timestep,
+        thresh_bg = thresh_func(
             self.background_leakage_alpha,
             self.background_leakage_beta,
         )
-        thresh_dj = target(
-            timestep,
+        thresh_dj = thresh_func(
             self.disjoint_object_alpha,
             self.disjoint_object_beta,
         )
@@ -142,34 +142,37 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
     def fit(self, image: Image.Image, prompt: str) -> List[torch.FloatTensor]:
         self.model.attention_store.reset()
+        self.model_ddim.attention_store.reset()
 
-        # TODO: Include prepare_unet function from UNet2DConditionalModel
-        # TODO: Ensure that attention_store is registered
         image = image.resize((self.image_size, self.image_size))
 
-        self.latents = ddim_inversion(self.model, image, prompt)
+        # DDIM inversion to compute latents
+        # TODO: Use CFGDDIM directly
+        self.latents = ddim_inversion(self.model_ddim, image, prompt)
         n_latents = len(self.latents)
 
-        null_embedding = self.model.encode_text(NULL_STRING)
-
         # Compute background mask from attention maps stored during DDIM inversion.
-        prompt_embedding = self.model.encode_text(prompt)
         index_noun_pairs = find_noun_indices(self.model, prompt)
         noun_indices = [i for i, _ in index_noun_pairs]
 
+        # TODO: Directly resize background map without converting to image first
+        # TODO: Refactor magic numbers in background calculation
         if self.background_leakage_coeff > 0:
             bg_map = background_mask(
-                self.model.attention_store,
+                self.model_ddim.attention_store,
                 index_noun_pairs,
                 algorithm=self.clustering_algorithm,
                 n_clusters=self.max_clusters,
+                random_state=0,
             )
-            self.model.attention_store.reset()
             bg_map = F.interpolate(
                 bg_map.float().unsqueeze(0).unsqueeze(0),
-                size=self.attention_resolution,
-                mode="bilinear",
-            ).squeeze(0)
+                size=512,
+                mode="nearest",
+            ).round().bool().float().squeeze(0).squeeze(0)
+            bg_map = F_vision.to_pil_image(bg_map)
+            bg_map = F_vision.resize(bg_map, self.attention_resolution)
+            bg_map = F_vision.pil_to_tensor(bg_map).bool().float().to(self.model.device)
 
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
@@ -191,6 +194,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         latent_cur = self.latents[-1]
         timesteps = self.model.get_timesteps()
         n_timesteps = len(timesteps)
+
+        null_embedding = self.model.encode_text(NULL_STRING)
 
         # TODO: Remove this assertion and put this in the unittests
         assert n_latents == n_timesteps + 1
@@ -249,7 +254,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
                 # Equation 10
                 if (thresh_at > loss_at) and (thresh_bg > loss_bg) and (thresh_dj > loss_dj):
-                    self.model.attention_store.reset()
                     break
 
                 # Equation 9
@@ -266,8 +270,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 with torch.no_grad():
                     self.model.text_encoder.get_input_embeddings().weight[index_no_updates] = encoder_embeddings[index_no_updates]
                 
-                self.model.attention_store.reset()
-
             torch.cuda.empty_cache()
 
             optimised_prompt_noun_embeddings = self.model.text_encoder.get_input_embeddings().weight[~index_no_updates].detach()
@@ -292,9 +294,9 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 latent_prev_rec = self.model.prev_step(noise_pred, t, latent_cur)
                 # TODO: Include early stopping condition if loss is similar for n steps
                 # Compute loss between predicted latent and true latent from DDIM inversion
-                loss = F.mse_loss(latent_prev_rec, latent_prev)
+                loss_nti = F.mse_loss(latent_prev_rec, latent_prev)
                 # Optimise null embedding
-                loss.backward(retain_graph=False)
+                loss_nti.backward(retain_graph=False)
                 nti_optimiser.step()
                 nti_optimiser.zero_grad()
             optimised_null_embeddings_list.append(null_embedding[:1].detach())
@@ -304,7 +306,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 latent_cur = self.model.prev_step(noise_pred, t, latent_cur)
 
             # Run a noise prediction to get cross attention maps.
-            self.model.attention_store.reset()
             with torch.no_grad():
                 self.model.get_noise_pred(
                     latent_cur,
@@ -318,7 +319,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     res=self.attention_resolution,
                     element_name="attn",
                 )
-            self.model.attention_store.reset()
             dpl_attention_maps_list.append(avg_cross_attn_maps.detach().cpu())
             torch.cuda.empty_cache()
 

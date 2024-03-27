@@ -169,7 +169,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             )
             bg_map = F.interpolate(
                 bg_map.float().unsqueeze(0).unsqueeze(0),
-                size=512,
+                size=self.image_size,
                 mode="nearest",
             ).round().bool().float().squeeze(0).squeeze(0)
             bg_map = F_vision.to_pil_image(bg_map)

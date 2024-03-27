@@ -96,9 +96,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     masks = {k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8)) for k, v in masks.items()}
 
     # (original, self-attn, self-attn cluster, cross-attn cat, cross-attn dog, background, foreground cat, foreground dog)
-    fig, axes = plt.subplots(nrows=1, ncols=9, figsize=(15, 5))
-
-    plot_image_on_axis(axes[-1], Image.fromarray((bg_mask.cpu().numpy() * 255).astype(np.uint8)), "BG MASK 2")
+    fig, axes = plt.subplots(nrows=1, ncols=8, figsize=(15, 5))
 
     plot_image_on_axis(axes[0], image, "Original")
     plot_image_on_axis(axes[1], self_attn_avg_proj, "Self-Attn")

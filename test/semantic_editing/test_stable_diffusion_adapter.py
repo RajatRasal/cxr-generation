@@ -18,14 +18,6 @@ def test_decode_encode_image(sd_adapter, image_prompt):
     assert median_err == 4
 
 
-def test_next_step(sd_adapter, image_prompt):
-    assert False
-
-
-def test_prev_step(sd_adapter, image_prompt):
-    assert False
-
-
 def test_get_noise_pred(sd_adapter, image_prompt):
     image, prompt = image_prompt
     prompt_embedding = sd_adapter.encode_text(prompt)

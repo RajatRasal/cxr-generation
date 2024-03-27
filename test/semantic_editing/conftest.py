@@ -19,12 +19,17 @@ DDIM_STEPS = 50
 GUIDANCE_SCALE_CFG = 7.5
 DPL_STEPS = 20
 DPL_NTI_STEPS = 50
-# STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
-STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
+STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
+# STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
+
+@pytest.fixture
+def seed():
+    return SEED
+
 
 @pytest.fixture(autouse=True)
-def initialise_random_seeds():
-    seed_everything(SEED)
+def initialise_random_seeds(seed):
+    seed_everything(seed)
 
 
 @pytest.fixture
@@ -33,10 +38,10 @@ def jet_cmap():
 
 
 @pytest.fixture
-def generator():
+def generator(seed):
     # TODO: Set cuda as a variable
     generator = torch.Generator("cuda")
-    generator.manual_seed(SEED)
+    generator.manual_seed(seed)
     return generator
 
 
@@ -144,7 +149,7 @@ def dpl_2(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
 
 
 @pytest.fixture
-def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
+def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate, seed):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
         sd_adapter_with_attn_accumulate,
@@ -162,6 +167,7 @@ def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
         disjoint_object_beta=0.9,
         max_clusters=5,
         clustering_algorithm="kmeans",
+        clustering_random_state=seed,
     )
 
 

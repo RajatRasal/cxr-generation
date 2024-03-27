@@ -231,6 +231,7 @@ def background_mask(
     background_threshold: float = 0.2,
     algorithm: CLUSTERING_ALGORITHM = "kmeans",
     n_clusters: int = 5,
+    cluster_random_state: int = 0,
     **clustering_kwargs,
 ) -> torch.FloatTensor:
     masks = find_masks(
@@ -239,7 +240,8 @@ def background_mask(
         background_threshold,
         algorithm,
         n_clusters,
-        **clustering_kwargs,
+        random_state=clustering_random_state,
+        # **clustering_kwargs,
     )
     return masks["BG"]
 

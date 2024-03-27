@@ -6,7 +6,7 @@ from PIL import Image
 from sklearn.decomposition import PCA
 
 from semantic_editing.tools import attention_map_pca, attention_map_cluster, attention_map_upsample, find_noun_indices, localise_nouns, normalise_image, stable_diffusion_tokens
-from semantic_editing.utils import plot_image_on_axis, save_figure
+from semantic_editing.utils import plot_image_on_axis, save_figure, seed_everything
 
 
 def _generate(gen, image, prompt, file_name):
@@ -41,7 +41,7 @@ def _test(model, image_and_prompt, recon_name, cross_attn_name):
     attn_maps = _generate(model, image, prompt, recon_name)
     attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
     _visualise_ca_maps(model, attn_maps_avg, prompt, cross_attn_name)
-t s
+
 
 def test_dpl_cross_attn_visualisation(
     dpl_3,
@@ -60,7 +60,7 @@ def test_nti_cross_attn_visualisation(
 
 
 def test_dpl_losses_cross_attn_visualisation(
-    nti, dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap,
+    nti, dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap, seed,
 ):
     models = [nti, dpl_1, dpl_2, dpl_3]
     image, prompt = image_prompt_cat_and_dog
@@ -73,6 +73,7 @@ def test_dpl_losses_cross_attn_visualisation(
 
     fig, axes = plt.subplots(nrows=len(models), ncols=n_tokens, figsize=(15, 5))
     for i, dpl in enumerate(models):
+        seed_everything(seed)
         attn_res = dpl.attention_resolution
         # Fit model and get attention maps
         cross_attn_avgs = dpl.fit(image, prompt)

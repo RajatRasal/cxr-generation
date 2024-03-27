@@ -41,23 +41,23 @@ def test_get_noise_pred(sd_adapter, image_prompt):
     fig.savefig("test_get_noise_pred.pdf", bbox_inches="tight")
 
 
-def test_ddim_inversion(sd_adapter, image_prompt):
+def test_ddim_inversion(sd_adapter_fixture, image_prompt):
     idxs = [
         0,
-        int(sd_adapter.ddim_steps / 5),
-        int(sd_adapter.ddim_steps * 2/5),
-        int(sd_adapter.ddim_steps * 3/5),
+        int(sd_adapter_fixture.ddim_steps / 5),
+        int(sd_adapter_fixture.ddim_steps * 2/5),
+        int(sd_adapter_fixture.ddim_steps * 3/5),
         -1,
     ]
 
     def decode_and_plot_latent(ax, latent, title = ""):
         ax.set_axis_off()
-        ax.imshow(sd_adapter.decode_latent(latent))
+        ax.imshow(sd_adapter_fixture.decode_latent(latent))
         ax.set_title(title)
 
-    latents = ddim_inversion(sd_adapter, *image_prompt)
+    latents = ddim_inversion(sd_adapter_fixture, *image_prompt)
     latent_T = latents[-1].clone()
-    assert len(latents) == sd_adapter.ddim_steps + 1
+    assert len(latents) == sd_adapter_fixture.ddim_steps + 1
 
     fig, axs = plt.subplots(nrows=1, ncols=len(idxs), figsize=(50, 10))
     for i in range(len(idxs)):
@@ -65,8 +65,8 @@ def test_ddim_inversion(sd_adapter, image_prompt):
     fig.savefig("test_ddim_inversion.pdf", bbox_inches="tight")
 
     def cfg_with_guidance(guidance_scale):
-        latents = classifier_free_guidance(sd_adapter, latent_T, image_prompt[1], guidance_scale)
-        assert len(latents) == sd_adapter.ddim_steps + 1
+        latents = classifier_free_guidance(sd_adapter_fixture, latent_T, image_prompt[1], guidance_scale)
+        assert len(latents) == sd_adapter_fixture.ddim_steps + 1
 
         fig, axs = plt.subplots(nrows=1, ncols=len(idxs), figsize=(50, 10))
         for i in range(len(idxs)):
@@ -76,13 +76,11 @@ def test_ddim_inversion(sd_adapter, image_prompt):
             bbox_inches="tight",
         )
 
-        return sd_adapter.decode_latent(latents[-1])
+        return sd_adapter_fixture.decode_latent(latents[-1])
 
     gen_no_guidance = cfg_with_guidance(1)
     gen_medium_guidance = cfg_with_guidance(4)
     gen_high_guidance = cfg_with_guidance(7.5)
-
-    assert True
 
 
 def test_tokenisation(sd_adapter, image_prompt):

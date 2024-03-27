@@ -1,15 +1,21 @@
 import math
 from abc import ABC, abstractmethod
 from itertools import product
-from typing import List, Literal, Optional, get_args
+from typing import List, Literal, Optional, Union, get_args
 
 import torch
 from diffusers import UNet2DConditionModel
 from diffusers.models.attention_processor import Attention
 
+from semantic_editing.validate import _validate_attn_map
+
 
 PLACE_IN_UNET = Literal["up", "down", "mid"]
 ATTENTION_COMPONENT = Literal["attn", "feat", "query", "key", "value"]
+
+
+def _unflatten_attn_map(item: torch.FloatTensor, res: int) -> torch.FloatTensor:
+    return item.reshape(-1, res, res, item.shape[-1])
 
 
 class AttentionStore(ABC):
@@ -18,25 +24,55 @@ class AttentionStore(ABC):
         self._num_att_layers = 0
         self.reset()
 
-    @staticmethod
-    def _attention_store_key_string(place_in_unet, is_cross, attn_component, res):
+    def _attention_store_key_string(
+        self,
+        place_in_unet: PLACE_IN_UNET,
+        is_cross: bool,
+        attn_component: ATTENTION_COMPONENT,
+        res: int,
+    ):
         attn_type = "cross" if is_cross else "self"
         return f"{place_in_unet}_{attn_type}_{attn_component}_{str(res)}"
 
-    @staticmethod
-    def get_empty_store():
+    def _get_empty_store(self):
         step_store = {}
         places_in_unet = ["down", "mid", "up"]
         is_cross = [True, False]
         attn_components = list(get_args(ATTENTION_COMPONENT)) 
         resolutions = [8, 16, 32, 64]
         for place_in_unet, _is_cross, attn_component, res in product(places_in_unet, is_cross, attn_components, resolutions):
-            dict_key = AttentionStore._attention_store_key_string(place_in_unet, _is_cross, attn_component, res)
+            dict_key = self._attention_store_key_string(place_in_unet, _is_cross, attn_component, res)
             step_store[dict_key] = None
         return step_store
 
-    @abstractmethod
     def __call__(
+        self,
+        attn: torch.FloatTensor,
+        is_cross: bool,
+        place_in_unet: str,
+        hidden_states: torch.FloatTensor,
+        query: torch.FloatTensor,
+        key: torch.FloatTensor,
+        value: torch.FloatTensor,
+    ):
+        self._step_store(
+            attn,
+            is_cross,
+            place_in_unet,
+            hidden_states,
+            query,
+            key,
+            value,
+        )
+
+        self._cur_att_layer += 1
+        if self._cur_att_layer == self._num_att_layers:
+            self._cur_att_layer = 0
+            self._cur_step_index += 1
+            self._between_steps()
+
+    @abstractmethod
+    def _step_store(
         self,
         attn: torch.FloatTensor,
         is_cross: bool,
@@ -49,49 +85,50 @@ class AttentionStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def between_steps(self):
+    def _between_steps(self):
         raise NotImplementedError
 
     @abstractmethod
-    def get_average_attention(self):
+    def _accumulate(self, item: Union[torch.FloatTensor, List[torch.FloatTensor]], res: int) -> List[torch.FloatTensor]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_average_attention(self):
         raise NotImplementedError
 
     def aggregate_attention(
         self,
-        places_in_unet: List[str],
+        places_in_unet: List[PLACE_IN_UNET],
         res: int,
         is_cross: bool,
         element_name: ATTENTION_COMPONENT,
     ) -> torch.FloatTensor:
         """Aggregates the attention across the different layers and heads at the specified resolution."""
-        assert self._cur_att_layer == 0, "Aggregate attention should only be called between diffusion steps"
+        if self._cur_att_layer != 0:
+            raise ValueError("Aggregate attention should only be called between diffusion steps")
 
         out = []
-        num_pixels = res ** 2
-        attention_maps = self.get_average_attention()
+        attention_maps = self._get_average_attention()
         for place_in_unet in places_in_unet:
             dict_key = self._attention_store_key_string(place_in_unet, is_cross, element_name, res)
             item = attention_maps[dict_key]
             if item is None:
                 continue
-            # TODO: Remove this nasty hack. Push this down into each child class.
-            if isinstance(item, list):
-                for x in item:
-                    out.append(x.reshape(-1, res, res, x.shape[-1]))
-            else:
-                out.append(item.reshape(-1, res, res, item.shape[-1]))
+            out.extend(self._accumulate(item, res))
+
         if len(out) > 0:
             out = torch.cat(out, dim=0)
             out = out.sum(0) / out.shape[0]
         else:
             raise ValueError("No attentions maps found matching the criteria")
+
         return out
 
     def reset(self):
         self._cur_step_index = 0
         self._cur_att_layer = 0
-        self.step_store = self.get_empty_store()
-        self.attention_store = self.get_empty_store()
+        self.step_store = self._get_empty_store()
+        self.attention_store = self._get_empty_store()
 
     def register_attention_processor(self):
         self._num_att_layers += 1
@@ -99,7 +136,10 @@ class AttentionStore(ABC):
 
 class AttentionStoreTimestep(AttentionStore):
 
-    def __call__(
+    def _accumulate(self, item: List[torch.FloatTensor], res: int) -> List[torch.FloatTensor]:
+        return [_unflatten_attn_map(_item, res) for _item in item]
+
+    def _step_store(
         self,
         attn: torch.FloatTensor,
         is_cross: bool,
@@ -116,23 +156,20 @@ class AttentionStoreTimestep(AttentionStore):
         else:
             self.step_store[dict_key].append(attn)
 
-        self._cur_att_layer += 1
-        if self._cur_att_layer == self._num_att_layers:
-            self._cur_att_layer = 0
-            self._cur_step_index += 1
-            self.between_steps()
-
-    def between_steps(self):
+    def _between_steps(self):
         self.attention_store = self.step_store
-        self.step_store = self.get_empty_store()
+        self.step_store = self._get_empty_store()
     
-    def get_average_attention(self):
+    def _get_average_attention(self):
         return self.attention_store
     
 
 class AttentionStoreAccumulate(AttentionStore):
 
-    def __call__(
+    def _accumulate(self, item: torch.FloatTensor, res: int) -> List[torch.FloatTensor]:
+        return [_unflatten_attn_map(item, res)]
+
+    def _step_store(
         self,
         attn: torch.FloatTensor,
         is_cross: bool,
@@ -144,17 +181,12 @@ class AttentionStoreAccumulate(AttentionStore):
     ):
         res = int(math.sqrt(attn.shape[1]))
         attn_components = list(get_args(ATTENTION_COMPONENT))
-        for attn_component, tensor in zip(attn_components, [attn, hidden_states, query, key, value]):
+        attn_values = [attn, hidden_states, query, key, value]
+        for attn_component, tensor in zip(attn_components, attn_values):
             dict_key = self._attention_store_key_string(place_in_unet, is_cross, attn_component, res)
             self.step_store[dict_key] = tensor
 
-        self._cur_att_layer += 1
-        if self._cur_att_layer == self._num_att_layers:
-            self._cur_att_layer = 0
-            self._cur_step_index += 1
-            self.between_steps()
-
-    def between_steps(self):
+    def _between_steps(self):
         for key, value in self.step_store.items():
             if value is None:
                 continue
@@ -162,9 +194,9 @@ class AttentionStoreAccumulate(AttentionStore):
                 self.attention_store[key] = value
             else:
                 self.attention_store[key] += value
-        self.step_store = self.get_empty_store()
+        self.step_store = self._get_empty_store()
     
-    def get_average_attention(self):
+    def _get_average_attention(self):
         # TODO: A tensor is not added here at every step. So we need to ensure that we know the true
         # length and don't assume that cur_step = 50
         cur_step = 50.0
@@ -222,9 +254,7 @@ class AttendExciteCrossAttnProcessor(AttnProcessorWithAttentionStore):
 
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
-        # only need to store attention maps during the Attend and Excite process
-        # TODO: Only call this when grad is True
-        # if attention_probs.requires_grad:
+        # Only need to store attention maps during the Attend and Excite process
         self.attention_store(
             attention_probs,
             is_cross,

@@ -42,7 +42,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         background_leakage_alpha: float = 50,
         background_leakage_beta: float = 0.7,
         clustering_algorithm: CLUSTERING_ALGORITHM = "kmeans",
-        max_clusters: int = 5
+        max_clusters: int = 5,
+        clustering_random_state: int = 0,
     ):
         self.model = model
         assert isinstance(self.model.attention_store, AttentionStoreTimestep)
@@ -69,12 +70,14 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
         self.clustering_algorithm = clustering_algorithm
         self.max_clusters = max_clusters
+        self.clustering_random_state = clustering_random_state
 
     def _loss_attention_balancing(
         self,
         cross_attn_maps: torch.FloatTensor,
         indices: List[int],
     ) -> torch.FloatTensor:
+        # shape = (res, res, 75 - 2 = 73)
         cross_attn_maps_norm = F.softmax(cross_attn_maps[:, :, 1:-1] * 100, dim=-1)
 
         # Initialise smoothing kernel
@@ -156,14 +159,13 @@ class DynamicPromptOptimisation(CFGOptimisation):
         noun_indices = [i for i, _ in index_noun_pairs]
 
         # TODO: Directly resize background map without converting to image first
-        # TODO: Refactor magic numbers in background calculation
         if self.background_leakage_coeff > 0:
             bg_map = background_mask(
                 self.model_ddim.attention_store,
                 index_noun_pairs,
                 algorithm=self.clustering_algorithm,
                 n_clusters=self.max_clusters,
-                random_state=0,
+                random_state=self.clustering_random_state,
             )
             bg_map = F.interpolate(
                 bg_map.float().unsqueeze(0).unsqueeze(0),

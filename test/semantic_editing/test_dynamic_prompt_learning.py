@@ -68,12 +68,12 @@ def test_nti_cross_attn_visualisation(
 
 
 def test_dpl_losses_cross_attn_visualisation(
-    dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap,
+    dpl_nti, dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap,
 ):
-    models = [dpl_1, dpl_2, dpl_3]
+    models = [dpl_nti, dpl_1, dpl_2, dpl_3]
     image, prompt = image_prompt_cat_and_dog
 
-    assert dpl_1.model == dpl_2.model == dpl_3.model
+    assert all(dpl.model == models[0].model for dpl in models)
 
     # Get tokens
     tokens = stable_diffusion_tokens(dpl_1.model, prompt, include_separators=True)

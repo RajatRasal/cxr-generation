@@ -21,8 +21,8 @@ DDIM_STEPS = 50
 GUIDANCE_SCALE_CFG = 7.5
 DPL_STEPS = 20
 DPL_NTI_STEPS = 50
-STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
-# STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
+# STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
+STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
 
 @pytest.fixture(autouse=True)
 def initialise_random_seeds():
@@ -168,9 +168,10 @@ def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
 
 
 @pytest.fixture
-def dpl_nti(sd_adapter_with_attn_timestep):
+def dpl_nti(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
+        sd_adapter_with_attn_accumulate,
         guidance_scale=GUIDANCE_SCALE_CFG,
         num_inner_steps_dpl=DPL_STEPS,
         num_inner_steps_nti=DPL_NTI_STEPS,

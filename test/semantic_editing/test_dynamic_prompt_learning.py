@@ -41,7 +41,7 @@ def _test(model, image_and_prompt, recon_name, cross_attn_name):
     attn_maps = _generate(model, image, prompt, recon_name)
     attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
     _visualise_ca_maps(model, attn_maps_avg, prompt, cross_attn_name)
-
+t s
 
 def test_dpl_cross_attn_visualisation(
     dpl_3,
@@ -49,14 +49,6 @@ def test_dpl_cross_attn_visualisation(
     jet_cmap,
 ):
     _test(dpl_3, image_prompt_cat_and_dog, "dpl_reconstruction.pdf", "dpl_avg_cross_attention_maps.pdf")
-
-
-def test_dpl_nti_cross_attn_visualisation(
-    dpl_nti,
-    image_prompt_cat_and_dog,
-    jet_cmap,
-):
-    _test(dpl_nti, image_prompt_cat_and_dog, "dpl_nti_reconstruction.pdf", "dpl_nti_avg_cross_attention_maps.pdf")
 
 
 def test_nti_cross_attn_visualisation(
@@ -68,9 +60,9 @@ def test_nti_cross_attn_visualisation(
 
 
 def test_dpl_losses_cross_attn_visualisation(
-    dpl_nti, dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap,
+    nti, dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap,
 ):
-    models = [dpl_nti, dpl_1, dpl_2, dpl_3]
+    models = [nti, dpl_1, dpl_2, dpl_3]
     image, prompt = image_prompt_cat_and_dog
 
     assert all(dpl.model == models[0].model for dpl in models)

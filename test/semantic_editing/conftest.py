@@ -10,8 +10,6 @@ from diffusers import StableDiffusionPipeline
 from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttendExciteCrossAttnProcessor
 from semantic_editing.classifier_free_guidance import CFGWithDDIM
 from semantic_editing.diffusion import StableDiffusionAdapter
-from semantic_editing.null_text_inversion import NullTokenOptimisation
-from semantic_editing.prompt_token_optimisation import PromptTokenOptimisation
 from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.utils import seed_everything
 
@@ -168,7 +166,7 @@ def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
 
 
 @pytest.fixture
-def dpl_nti(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
+def nti(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
     return DynamicPromptOptimisation(
         sd_adapter_with_attn_timestep,
         sd_adapter_with_attn_accumulate,
@@ -179,20 +177,6 @@ def dpl_nti(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
         disjoint_object_coeff=0,
         background_leakage_coeff=0,
     )
-
-
-@pytest.fixture
-def nti(sd_adapter_with_attn_timestep):
-    return NullTokenOptimisation(
-        sd_adapter_with_attn_timestep,
-        guidance_scale=GUIDANCE_SCALE_CFG,
-        num_inner_steps=DPL_NTI_STEPS,
-    )
-
-
-# @pytest.fixture
-# def pti(sd_adapter):
-#     return PromptTokenOptimisation(sd_adapter, guidance_scale=7.5, num_inner_steps=20)
 
 
 @pytest.fixture

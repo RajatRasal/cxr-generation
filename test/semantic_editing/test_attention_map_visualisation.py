@@ -60,6 +60,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     cfg_ddim,
     image_prompt_cat_and_dog,
     attention_store_accumulate,
+    seed,
 ):
     # TODO: Make this test display figure 4 from the paper
     image, prompt = image_prompt_cat_and_dog
@@ -73,7 +74,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         element_name="attn",
     )
     self_attn_avg_proj = attention_map_pca(self_attn_avg, n_components=3, normalise=True)
-    self_attn_avg_clusters = attention_map_cluster(self_attn_avg, algorithm="kmeans", n_clusters=5, random_state=0)
+    self_attn_avg_clusters = attention_map_cluster(self_attn_avg, algorithm="kmeans", n_clusters=5, random_state=seed)
 
     # Cross-Attention
     cross_attn_avg = attention_store_accumulate.aggregate_attention(
@@ -91,7 +92,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         0.2,
         "kmeans",
         5,
-        random_state=0,
+        random_state=seed,
     )
     masks = {k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8)) for k, v in masks.items()}
 

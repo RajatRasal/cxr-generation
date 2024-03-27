@@ -165,7 +165,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 index_noun_pairs,
                 algorithm=self.clustering_algorithm,
                 n_clusters=self.max_clusters,
-                random_state=self.clustering_random_state,
+                cluster_random_state=self.clustering_random_state,
             )
             bg_map = F.interpolate(
                 bg_map.float().unsqueeze(0).unsqueeze(0),

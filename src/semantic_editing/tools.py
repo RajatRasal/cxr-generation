@@ -240,8 +240,8 @@ def background_mask(
         background_threshold,
         algorithm,
         n_clusters,
-        random_state=clustering_random_state,
-        # **clustering_kwargs,
+        random_state=cluster_random_state,
+        **clustering_kwargs,
     )
     return masks["BG"]
 

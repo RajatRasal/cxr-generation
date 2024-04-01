@@ -21,7 +21,7 @@ def _unflatten_attn_map(item: torch.FloatTensor, res: int) -> torch.FloatTensor:
 class AttentionStore(ABC):
 
     def __init__(self):
-        self._num_att_layers = 0
+        self._num_att_layers = -1
         self.reset()
 
     def _attention_store_key_string(
@@ -68,7 +68,6 @@ class AttentionStore(ABC):
         self._cur_att_layer += 1
         if self._cur_att_layer == self._num_att_layers:
             self._cur_att_layer = 0
-            self._cur_step_index += 1
             self._between_steps()
 
     @abstractmethod
@@ -89,7 +88,11 @@ class AttentionStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _accumulate(self, item: Union[torch.FloatTensor, List[torch.FloatTensor]], res: int) -> List[torch.FloatTensor]:
+    def _accumulate(
+        self,
+        item: Union[torch.FloatTensor, List[torch.FloatTensor]],
+        res: int,
+    ) -> List[torch.FloatTensor]:
         raise NotImplementedError
 
     @abstractmethod
@@ -104,9 +107,6 @@ class AttentionStore(ABC):
         element_name: ATTENTION_COMPONENT,
     ) -> torch.FloatTensor:
         """Aggregates the attention across the different layers and heads at the specified resolution."""
-        if self._cur_att_layer != 0:
-            raise ValueError("Aggregate attention should only be called between diffusion steps")
-
         out = []
         attention_maps = self._get_average_attention()
         for place_in_unet in places_in_unet:
@@ -125,7 +125,6 @@ class AttentionStore(ABC):
         return out
 
     def reset(self):
-        self._cur_step_index = 0
         self._cur_att_layer = 0
         self.step_store = self._get_empty_store()
         self.attention_store = self._get_empty_store()
@@ -150,6 +149,8 @@ class AttentionStoreTimestep(AttentionStore):
         value: torch.FloatTensor,
     ):
         res = int(math.sqrt(attn.shape[1]))
+        # TODO: As a general class, this should store feature, query, key and value
+        # vectors also.
         dict_key = self._attention_store_key_string(place_in_unet, is_cross, "attn", res)
         if self.step_store[dict_key] is None:
             self.step_store[dict_key] = [attn]
@@ -180,7 +181,7 @@ class AttentionStoreAccumulate(AttentionStore):
         value: torch.FloatTensor,
     ):
         res = int(math.sqrt(attn.shape[1]))
-        attn_components = list(get_args(ATTENTION_COMPONENT))
+        attn_components = ["attn", "feat", "query", "key", "value"]
         attn_values = [attn, hidden_states, query, key, value]
         for attn_component, tensor in zip(attn_components, attn_values):
             dict_key = self._attention_store_key_string(place_in_unet, is_cross, attn_component, res)

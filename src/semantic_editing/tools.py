@@ -4,6 +4,7 @@ import nltk
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as F_vision
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
@@ -134,10 +135,10 @@ def find_noun_indices(model: StableDiffusionAdapter, prompt: str) -> List[Tuple[
 
 def localise_nouns(
     clusters: np.ndarray,
-    cross_attention: torch.FloatTensor,  # np.ndarray,
+    cross_attention: torch.FloatTensor,
     index_noun_pairs: List[Tuple[int, str]],
     background_threshold: int = 0.2,
-) -> Dict[str, torch.FloatTensor]:  # np.ndarray]:
+) -> Dict[str, torch.FloatTensor]:
     scale = clusters.shape[0] / cross_attention.shape[0]
     if scale < 1:
         raise ValueError(f"Dimensionality of clusters must be greater than cross_attention (dim(clusters) = {clusters.shape[0]} < dim(cross_attention) = {cross_attention.shape[0]})")
@@ -208,8 +209,13 @@ def find_masks(
         res=32,
         element_name="attn",
     )
-    clusters = attention_map_cluster(attn_avg, algorithm=algorithm, n_clusters=n_clusters, **clustering_kwargs)
-
+    device = attn_avg.device
+    clusters = attention_map_cluster(
+        attn_avg,
+        algorithm=algorithm,
+        n_clusters=n_clusters,
+        **clustering_kwargs,
+    )
     cross_avg = attention_store.aggregate_attention(
         places_in_unet=["up", "down", "mid"],
         is_cross=True,
@@ -222,7 +228,7 @@ def find_masks(
         index_noun_pairs,
         background_threshold,
     )
-    return masks
+    return {k: v.to(device) for k, v in masks.items()}
 
 
 def background_mask(
@@ -232,7 +238,8 @@ def background_mask(
     algorithm: CLUSTERING_ALGORITHM = "kmeans",
     n_clusters: int = 5,
     cluster_random_state: int = 0,
-    **clustering_kwargs,
+    attention_resolution: int = 16,
+    upscale_size: int = 512,
 ) -> torch.FloatTensor:
     masks = find_masks(
         attention_store,
@@ -241,7 +248,18 @@ def background_mask(
         algorithm,
         n_clusters,
         random_state=cluster_random_state,
-        **clustering_kwargs,
     )
-    return masks["BG"]
+    bg_map = masks["BG"]
+    device = bg_map.device
+
+    # TODO: Directly resize background map without converting to image first
+    bg_map = F.interpolate(
+        bg_map.float().unsqueeze(0).unsqueeze(0),
+        size=(upscale_size, upscale_size),
+        mode="nearest",
+    ).round().bool().float().squeeze(0).squeeze(0)
+    bg_map = F_vision.to_pil_image(bg_map)
+    bg_map = F_vision.resize(bg_map, attention_resolution)
+    bg_map = F_vision.pil_to_tensor(bg_map).bool().float().to(device)
+    return bg_map
 

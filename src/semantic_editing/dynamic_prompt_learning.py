@@ -41,6 +41,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         background_leakage_coeff: float = 0.1,
         background_leakage_alpha: float = 50,
         background_leakage_beta: float = 0.7,
+        background_clusters_threshold: float = 0.3,
         clustering_algorithm: CLUSTERING_ALGORITHM = "kmeans",
         max_clusters: int = 5,
         clustering_random_state: int = 0,
@@ -68,6 +69,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         self.background_leakage_alpha = background_leakage_alpha
         self.background_leakage_beta = background_leakage_beta
 
+        self.background_clusters_threshold = background_clusters_threshold
         self.clustering_algorithm = clustering_algorithm
         self.max_clusters = max_clusters
         self.clustering_random_state = clustering_random_state
@@ -163,18 +165,13 @@ class DynamicPromptOptimisation(CFGOptimisation):
             bg_map = background_mask(
                 self.model_ddim.attention_store,
                 index_noun_pairs,
+                background_threshold=self.background_clusters_threshold,
                 algorithm=self.clustering_algorithm,
                 n_clusters=self.max_clusters,
                 cluster_random_state=self.clustering_random_state,
+                upscale_size=self.image_size,
             )
-            bg_map = F.interpolate(
-                bg_map.float().unsqueeze(0).unsqueeze(0),
-                size=self.image_size,
-                mode="nearest",
-            ).round().bool().float().squeeze(0).squeeze(0)
-            bg_map = F_vision.to_pil_image(bg_map)
-            bg_map = F_vision.resize(bg_map, self.attention_resolution)
-            bg_map = F_vision.pil_to_tensor(bg_map).bool().float().to(self.model.device)
+        self.model_ddim.attention_store.reset()
 
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
@@ -212,6 +209,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             # Optimise text tokens w.r.t attention maps
             dpl_optimiser = torch.optim.AdamW(self.model.text_encoder.get_input_embeddings().parameters())
             for j in range(self.num_inner_steps_dpl):
+                self.model.attention_store.reset()
                 # Sample the noise distribution to fill up the attention store
                 prompt_embedding = self.model.encode_text_with_grad(prompt)
                 self.model.get_noise_pred(
@@ -306,8 +304,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 noise_pred_uncond = self.model.get_noise_pred(latent_cur, t, null_embedding)
                 noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
                 latent_cur = self.model.prev_step(noise_pred, t, latent_cur)
-
             # Run a noise prediction to get cross attention maps.
+            self.model.attention_store.reset()
             with torch.no_grad():
                 self.model.get_noise_pred(
                     latent_cur,
@@ -321,6 +319,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     res=self.attention_resolution,
                     element_name="attn",
                 )
+            self.model.attention_store.reset()
             dpl_attention_maps_list.append(avg_cross_attn_maps.detach().cpu())
             torch.cuda.empty_cache()
 

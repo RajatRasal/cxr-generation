@@ -158,15 +158,14 @@ class DynamicPromptOptimisation(CFGOptimisation):
         image = image.resize((self.image_size, self.image_size))
 
         # DDIM inversion to compute latents
-        # TODO: Use CFGDDIM directly
         self.latents = ddim_inversion(self.model_ddim, image, prompt)
         n_latents = len(self.latents)
 
-        # Compute background mask from attention maps stored during DDIM inversion.
+        # Find noun tokens
         index_noun_pairs = find_noun_indices(self.model, prompt)
         noun_indices = [i for i, _ in index_noun_pairs]
 
-        # TODO: Directly resize background map without converting to image first
+        # Compute background mask from attention maps stored during DDIM inversion.
         if self.background_leakage_coeff > 0:
             bg_map = background_mask(
                 self.model_ddim.attention_store,
@@ -182,7 +181,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
         # in the tokenised sentence.
-        self.prompt_token_ids = self.model.tokenise_text(prompt).flatten().unique(sorted=True)
+        self.noun_token_ids = self.model.tokenise_text(prompt).flatten()[noun_indices].unique(sorted=True)
 
         # NTI in outer loop, DPL in inner loop.
         dpl_attention_maps = []
@@ -266,9 +265,9 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
                 # During backprop, all embeddings may be updated. We want to reset
                 # embeddings that are not in the prompt back to their original values
-                self.model.reset_embeddings(self.prompt_token_ids)
+                self.model.reset_embeddings(self.noun_token_ids)
                 
-            _prompt_noun_embeddings = self.model.get_text_embeddings(self.prompt_token_ids).detach()
+            _prompt_noun_embeddings = self.model.get_text_embeddings(self.noun_token_ids).detach()
             prompt_noun_embeddings.append(_prompt_noun_embeddings)
             
             # --------- NTI
@@ -329,7 +328,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
     @torch.no_grad()
     def generate(self, prompt: str) -> Image.Image:
         # TODO: This currently assumes reconstruction. Change this to implement object editing.
-        if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "prompt_token_ids")):
+        if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "noun_token_ids")):
             raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
         
         self.model.reset_embeddings()
@@ -344,7 +343,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         ).to(self.model.device)
 
         for i, timestep in enumerate(tqdm(self.model.get_timesteps())):
-            self.model.set_text_embeddings(self.prompt_noun_embeddings[i], self.prompt_token_ids)
+            self.model.set_text_embeddings(self.prompt_noun_embeddings[i], self.noun_token_ids)
             target_prompt_embedding = self.model.encode_text(prompt)
             latent = classifier_free_guidance_step(
                 self.model,

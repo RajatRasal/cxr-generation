@@ -176,19 +176,12 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
         # in the tokenised sentence.
-        # TODO: Reimplement this so that embeddings in the text_encoder are
-        # not updated in place but are updated in a copy of the weights stored
-        # within this class.
-        encoder_embeddings = self.model.text_encoder.get_input_embeddings().weight.data.clone()
-        prompt_token_ids = self.model.tokenise_text(prompt)
-        index_no_updates = torch.ones(len(self.model.tokenizer), dtype=bool)
-        index_no_updates[prompt_token_ids] = False
-        self.index_no_updates = index_no_updates
+        self.prompt_token_ids = self.model.tokenise_text(prompt).flatten().unique(sorted=True)
 
         # NTI in outer loop, DPL in inner loop.
-        dpl_attention_maps_list = []
-        optimised_null_embeddings_list = []
-        optimised_prompt_noun_embeddings_list = []
+        dpl_attention_maps = []
+        null_embeddings = []
+        prompt_noun_embeddings = []
 
         latent_cur = self.latents[-1]
         timesteps = self.model.get_timesteps()
@@ -207,7 +200,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             thresh_at, thresh_bg, thresh_dj = self._compute_threshold(i)
 
             # Optimise text tokens w.r.t attention maps
-            dpl_optimiser = torch.optim.AdamW(self.model.text_encoder.get_input_embeddings().parameters())
+            dpl_optimiser = torch.optim.AdamW(self.model.get_embeddings().parameters())
             for j in range(self.num_inner_steps_dpl):
                 self.model.attention_store.reset()
                 # Sample the noise distribution to fill up the attention store
@@ -267,13 +260,10 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
                 # During backprop, all embeddings may be updated. We want to reset
                 # embeddings that are not in the prompt back to their original values
-                with torch.no_grad():
-                    self.model.text_encoder.get_input_embeddings().weight[index_no_updates] = encoder_embeddings[index_no_updates]
+                self.model.reset_embeddings(self.prompt_token_ids)
                 
-            torch.cuda.empty_cache()
-
-            optimised_prompt_noun_embeddings = self.model.text_encoder.get_input_embeddings().weight[~index_no_updates].detach()
-            optimised_prompt_noun_embeddings_list.append(optimised_prompt_noun_embeddings)
+            _prompt_noun_embeddings = self.model.get_text_embeddings(self.prompt_token_ids).detach()
+            prompt_noun_embeddings.append(_prompt_noun_embeddings)
             
             # --------- NTI
             # Optimise null tokens for reconstructing latents
@@ -299,11 +289,12 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 loss_nti.backward(retain_graph=False)
                 nti_optimiser.step()
                 nti_optimiser.zero_grad()
-            optimised_null_embeddings_list.append(null_embedding[:1].detach())
+            null_embeddings.append(null_embedding[:1].detach())
             with torch.no_grad():
                 noise_pred_uncond = self.model.get_noise_pred(latent_cur, t, null_embedding)
                 noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
                 latent_cur = self.model.prev_step(noise_pred, t, latent_cur)
+
             # Run a noise prediction to get cross attention maps.
             self.model.attention_store.reset()
             with torch.no_grad():
@@ -320,20 +311,22 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     element_name="attn",
                 )
             self.model.attention_store.reset()
-            dpl_attention_maps_list.append(avg_cross_attn_maps.detach().cpu())
-            torch.cuda.empty_cache()
+            dpl_attention_maps.append(avg_cross_attn_maps.detach().cpu())
 
-        self.null_embeddings = optimised_null_embeddings_list
-        self.prompt_noun_embeddings = optimised_prompt_noun_embeddings_list
+        self.null_embeddings = null_embeddings
+        self.prompt_noun_embeddings = prompt_noun_embeddings
 
-        return dpl_attention_maps_list
+        self.model.reset_embeddings()
+
+        return dpl_attention_maps
 
     @torch.no_grad()
     def generate(self, prompt: str) -> Image.Image:
         # TODO: This currently assumes reconstruction. Change this to implement object editing.
-        if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "index_no_updates")):
+        if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "prompt_token_ids")):
             raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
         
+        self.model.reset_embeddings()
         self.model.attention_store.reset()
 
         # TODO: Move this into model adapter
@@ -345,7 +338,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         ).to(self.model.device)
 
         for i, timestep in enumerate(tqdm(self.model.get_timesteps())):
-            self.model.text_encoder.get_input_embeddings().weight[~self.index_no_updates] = self.prompt_noun_embeddings[i]
+            self.model.set_text_embeddings(self.prompt_noun_embeddings[i], self.prompt_token_ids)
             target_prompt_embedding = self.model.encode_text(prompt)
             latent = classifier_free_guidance_step(
                 self.model,
@@ -355,6 +348,9 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 timestep,
                 self.guidance_scale,
             )
+
+        self.model.reset_embeddings()
+        self.model.attention_store.reset()
 
         image = self.model.decode_latent(latent)
         return image

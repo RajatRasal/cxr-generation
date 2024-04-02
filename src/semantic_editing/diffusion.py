@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Literal, Type, Union
+from typing import List, Literal, Optional, Type, Union
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +26,7 @@ class StableDiffusionAdapter:
         self.vae = self.model.vae
         self.unet = self.model.unet
         self.device = self.model.device
+        self._original_embeddings = self.get_embeddings().weight.data.clone()
 
     @torch.no_grad()
     def tokenise_text(self, prompt: str, string: bool = False) -> Union[torch.IntTensor, List[str]]:
@@ -101,6 +102,25 @@ class StableDiffusionAdapter:
     def get_timesteps(self, inversion: bool = False) -> torch.IntTensor:
         timesteps = self.scheduler.timesteps
         return timesteps.flip(dims=(0,)) if inversion else timesteps
+
+    def get_embeddings(self) -> torch.nn.modules.sparse.Embedding:
+        return self.model.text_encoder.get_input_embeddings()
+
+    def get_text_embeddings(self, indices: List[int]) -> torch.nn.parameter.Parameter:
+        return self.model.text_encoder.get_input_embeddings().weight[indices]
+
+    def set_text_embeddings(self, text_embeddings: torch.nn.parameter.Parameter, indices: List[int]):
+        assert text_embeddings.shape[0] == len(indices)
+        self.model.text_encoder.get_input_embeddings().weight[indices] = text_embeddings
+
+    @torch.no_grad()
+    def reset_embeddings(self, indices_to_keep: Optional[List[int]] = None):
+        if indices_to_keep is None:
+            self.get_embeddings().weight[:, :] = self._original_embeddings
+        else:
+            mask = torch.ones(len(self.model.tokenizer), dtype=bool)
+            mask[indices_to_keep] = False
+            self.get_embeddings().weight[mask] = self._original_embeddings[mask]
 
     def register_attention_control(
         self,

@@ -194,7 +194,6 @@ def ddim_inversion(
     image: Image.Image,
     prompt: str,
 ) -> List[torch.FloatTensor]:
-    # TODO: Implement this using DDIMInverseScheduler in Diffusers
     latent = model.encode_image(image)
     prompt_embedding = model.encode_text(prompt)
     latents = [latent]

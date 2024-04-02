@@ -35,6 +35,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         attention_balancing_coeff: float = 1.0,
         attention_balancing_alpha: float = 25,
         attention_balancing_beta: float = 0.3,
+        attention_balancing_smoothing_kernel_sigma float = 0.5,
         disjoint_object_coeff: float = 0.1,
         disjoint_object_alpha: float = 25,
         disjoint_object_beta: float = 0.9,
@@ -46,6 +47,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         max_clusters: int = 5,
         clustering_random_state: int = 0,
     ):
+        # TODO: Regsiter multiple attention stores for the same model as a dictionary
         self.model = model
         assert isinstance(self.model.attention_store, AttentionStoreTimestep)
         self.model_ddim = model_ddim
@@ -62,6 +64,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         self.attention_balancing_coeff = attention_balancing_coeff
         self.attention_balancing_alpha = attention_balancing_alpha
         self.attention_balancing_beta = attention_balancing_beta
+        self.attention_balancing_smoothing_kernel_sigma = attention_balancing_smoothing_kernel_sigma
         self.disjoint_object_coeff = disjoint_object_coeff
         self.disjoint_object_alpha = disjoint_object_alpha
         self.disjoint_object_beta = disjoint_object_beta
@@ -83,8 +86,12 @@ class DynamicPromptOptimisation(CFGOptimisation):
         cross_attn_maps_norm = F.softmax(cross_attn_maps[:, :, 1:-1] * 100, dim=-1)
 
         # Initialise smoothing kernel
-        # TODO: pass gaussian smoothing hyperparameters (kernel_size, sigma) into constructor
-        smoothing_kernel = GaussianSmoothing(channels=1, kernel_size=3, sigma=0.5, dim=2).to(self.model.device)
+        smoothing_kernel = GaussianSmoothing(
+            channels=1,
+            kernel_size=3,
+            sigma=self.attention_balancing_smoothing_kernel_sigma,
+            dim=2,
+        ).to(self.model.device)
 
         # Equation 8 required cross-attention maps to be passed through
         # Gaussian smoothing filter, as mentioned in Attend-and-Excite paper.
@@ -92,7 +99,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
         for i in indices:
             # Compute the max activation in cross attn map for each of the chosen indices.
             idx_map = cross_attn_maps_norm[:, :, i - 1]
-            # TODO: pass padding hyperparameters into constructor
             padded_map = F.pad(idx_map.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="reflect")
             smooth_map = smoothing_kernel(padded_map).squeeze(0).squeeze(0)
             max_attn = smooth_map.max()

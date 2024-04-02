@@ -35,7 +35,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         attention_balancing_coeff: float = 1.0,
         attention_balancing_alpha: float = 25,
         attention_balancing_beta: float = 0.3,
-        attention_balancing_smoothing_kernel_sigma float = 0.5,
+        attention_balancing_smoothing_kernel_sigma: float = 0.5,
         disjoint_object_coeff: float = 0.1,
         disjoint_object_alpha: float = 25,
         disjoint_object_beta: float = 0.9,

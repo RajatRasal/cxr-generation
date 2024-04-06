@@ -11,7 +11,7 @@ from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeli
 from torch.optim import Adam
 from tqdm import tqdm
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep
+from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttendExciteCrossAttnProcessor, AttendExciteCrossAttnProcessorP2P
 from semantic_editing.base import CFGOptimisation, NULL_STRING
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
@@ -24,7 +24,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
     def __init__(
         self,
         model: StableDiffusionAdapter,
-        model_ddim: StableDiffusionAdapter,
         guidance_scale: int,
         num_inner_steps_dpl: int = 50,
         num_inner_steps_nti: int = 20,
@@ -47,11 +46,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         max_clusters: int = 5,
         clustering_random_state: int = 0,
     ):
-        # TODO: Regsiter multiple attention stores for the same model as a dictionary
         self.model = model
-        assert isinstance(self.model.attention_store, AttentionStoreTimestep)
-        self.model_ddim = model_ddim
-        assert isinstance(self.model_ddim.attention_store, AttentionStoreAccumulate)
 
         self.guidance_scale = guidance_scale
         self.num_inner_steps_dpl = num_inner_steps_dpl
@@ -152,13 +147,16 @@ class DynamicPromptOptimisation(CFGOptimisation):
         return thresh_at, thresh_bg, thresh_dj
 
     def fit(self, image: Image.Image, prompt: str) -> List[torch.FloatTensor]:
-        self.model.attention_store.reset()
-        self.model_ddim.attention_store.reset()
-
         image = image.resize((self.image_size, self.image_size))
 
+        # Use AttentionStoreAccumulate for background map prediction
+        self.model.register_attention_store(
+            AttentionStoreAccumulate(),
+            AttendExciteCrossAttnProcessor,
+        )
+
         # DDIM inversion to compute latents
-        self.latents = ddim_inversion(self.model_ddim, image, prompt)
+        self.latents = ddim_inversion(self.model, image, prompt)
         n_latents = len(self.latents)
 
         # Find noun tokens
@@ -168,7 +166,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Compute background mask from attention maps stored during DDIM inversion.
         if self.background_leakage_coeff > 0:
             bg_map = background_mask(
-                self.model_ddim.attention_store,
+                self.model.get_attention_store(),
                 index_noun_pairs,
                 background_threshold=self.background_clusters_threshold,
                 algorithm=self.clustering_algorithm,
@@ -176,7 +174,6 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 cluster_random_state=self.clustering_random_state,
                 upscale_size=self.image_size,
             )
-        self.model_ddim.attention_store.reset()
 
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
@@ -194,8 +191,11 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
         null_embedding = self.model.encode_text(NULL_STRING)
 
-        # TODO: Remove this assertion and put this in the unittests
-        assert n_latents == n_timesteps + 1
+        # Use AttentionStoreTimestep for DPL + NTI optimisations
+        self.model.register_attention_store(
+            AttentionStoreTimestep(),
+            AttendExciteCrossAttnProcessor,
+        )
 
         for i in range(n_timesteps):
             t = timesteps[i]
@@ -207,7 +207,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             # Optimise text tokens w.r.t attention maps
             dpl_optimiser = torch.optim.AdamW(self.model.get_embeddings().parameters())
             for j in range(self.num_inner_steps_dpl):
-                self.model.attention_store.reset()
+                self.model.get_attention_store().reset()
                 # Sample the noise distribution to fill up the attention store
                 prompt_embedding = self.model.encode_text_with_grad(prompt)
                 self.model.get_noise_pred(
@@ -217,7 +217,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     True,
                 )
 
-                avg_cross_attn_maps = self.model.attention_store.aggregate_attention(
+                avg_cross_attn_maps = self.model.get_attention_store().aggregate_attention(
                     places_in_unet=["up", "down", "mid"],
                     is_cross=True,
                     res=self.attention_resolution,
@@ -301,7 +301,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 latent_cur = self.model.prev_step(noise_pred, t, latent_cur)
 
             # Run a noise prediction to get cross attention maps.
-            self.model.attention_store.reset()
+            self.model.get_attention_store().reset()
             with torch.no_grad():
                 self.model.get_noise_pred(
                     latent_cur,
@@ -309,37 +309,62 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     prompt_embedding,
                     True,
                 )
-                avg_cross_attn_maps = self.model.attention_store.aggregate_attention(
+                avg_cross_attn_maps = self.model.get_attention_store().aggregate_attention(
                     places_in_unet=["up", "down", "mid"],
                     is_cross=True,
                     res=self.attention_resolution,
                     element_name="attn",
                 )
-            self.model.attention_store.reset()
+            self.model.get_attention_store().reset()
             dpl_attention_maps.append(avg_cross_attn_maps.detach().cpu())
 
         self.null_embeddings = null_embeddings
         self.prompt_noun_embeddings = prompt_noun_embeddings
 
         self.model.reset_embeddings()
+        self.model.reset_attention_store()
 
         return dpl_attention_maps
 
     @torch.no_grad()
-    def generate(self, prompt: str) -> Image.Image:
+    def generate(
+        self,
+        prompt: str,
+        edit: Literal["recon", "replace", "reweight"] = "recon",
+    ) -> Image.Image:
         # TODO: This currently assumes reconstruction. Change this to implement object editing.
-        if not (hasattr(self, "null_embeddings") and hasattr(self, "latents") and hasattr(self, "prompt_noun_embeddings") and hasattr(self, "noun_token_ids")):
+        if not (
+            hasattr(self, "null_embeddings") and \
+            hasattr(self, "latents") and \
+            hasattr(self, "prompt_noun_embeddings") and \
+            hasattr(self, "noun_token_ids")
+        ):
             raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
         
         self.model.reset_embeddings()
-        self.model.attention_store.reset()
+        self.model.reset_attention_store()
+
+        if edit == "replace":
+            self.model.register_attention_store(
+                AttentionStoreReplace(),
+                AttendExciteCrossAttnProcessorP2P,
+            )
+        elif edit == "reweight":
+            self.model.register_attention_store(
+                AttentionStoreReweight(),
+                AttendExciteCrossAttnProcessorP2P,
+            )
+        elif edit == "recon":
+            pass
+        else:
+            raise ValueError(f"{edit} is not a valid editing method")
 
         # TODO: Move this into model adapter
         latent = self.latents[-1].expand(
             1,
             self.model.unet.config.in_channels,
             self.image_size // 8,
-            self.image_size // 8
+            self.image_size // 8,
         ).to(self.model.device)
 
         for i, timestep in enumerate(tqdm(self.model.get_timesteps())):
@@ -355,7 +380,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             )
 
         self.model.reset_embeddings()
-        self.model.attention_store.reset()
+        self.model.reset_attention_store()
 
         image = self.model.decode_latent(latent)
         return image

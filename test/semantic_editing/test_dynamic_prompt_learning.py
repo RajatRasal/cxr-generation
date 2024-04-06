@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import matplotlib.pyplot as plt
 import pytest
@@ -59,6 +61,7 @@ def test_nti_cross_attn_visualisation(
     _test(nti, image_prompt_cat_and_dog, "nti_reconstruction.pdf", "nti_avg_cross_attention_maps.pdf")
 
 
+@pytest.mark.slow
 def test_dpl_losses_cross_attn_visualisation(
     nti, dpl_1, dpl_2, dpl_3, image_prompt_cat_and_dog, jet_cmap, seed,
 ):
@@ -89,4 +92,10 @@ def test_dpl_losses_cross_attn_visualisation(
             title = token if i == 0 else None
             plot_image_on_axis(axes[i][j], norm_attn_map, title, fontsize=10)
     save_figure(fig, "dpl_losses_cross_attention_comparison.pdf")
+
+
+def test_dpl_attention_replace(
+    dpl_3, image_prompt_cat_and_dog, jet_cmap, seed,
+):
+    assert False
 

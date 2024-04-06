@@ -14,7 +14,7 @@ from semantic_editing.attention import AttentionStore, AttendExciteCrossAttnProc
 
 class StableDiffusionAdapter:
 
-    def __init__(self, model: StableDiffusionPipeline, ddim_steps: int = 50):
+    def __init__(self, model: StableDiffusionPipeline, ddim_steps: int = 50, prepare_unet_for_editing: bool = True):
         self.model = model
         self.text_encoder = self.model.text_encoder
         self.ddim_steps = ddim_steps
@@ -25,8 +25,11 @@ class StableDiffusionAdapter:
         self.tokenizer = self.model.tokenizer
         self.vae = self.model.vae
         self.unet = self.model.unet
+        if prepare_unet_for_editing:
+            self.unet = prepare_unet(self.unet)
         self.device = self.model.device
         self._original_embeddings = self.get_embeddings().weight.data.clone()
+        self.attention_store = None
 
     @torch.no_grad()
     def tokenise_text(self, prompt: str, string: bool = False) -> Union[torch.IntTensor, List[str]]:
@@ -122,17 +125,13 @@ class StableDiffusionAdapter:
             mask[indices_to_keep] = False
             self.get_embeddings().weight[mask] = self._original_embeddings[mask]
 
-    def register_attention_control(
+    def register_attention_store(
         self,
         attention_store: AttentionStore,
         attention_processor_type: Type[AttendExciteCrossAttnProcessor],
     ):
         self.attention_store = attention_store
-        self.unet = prepare_unet(self.unet)
         attention_processors = {}
-        # TODO: Check if we need place_in_unet by looking at the experiments/tests in the DPL code
-        # I have a feeling that the AttnProcessor does not need to know the place_in_unet
-        # but it is helpful having this for visualisations.
         for name in self.unet.attn_processors.keys():
             if name.startswith("mid_block"):
                 place_in_unet = "mid"
@@ -147,6 +146,12 @@ class StableDiffusionAdapter:
                 place_in_unet=place_in_unet,
             )
         self.unet.set_attn_processor(attention_processors)
+
+    def get_attention_store(self) -> AttentionStore:
+        return self.attention_store
+
+    def reset_attention_store(self):
+        self.attention_store = None
 
 
 @torch.no_grad()

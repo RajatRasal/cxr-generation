@@ -1,3 +1,4 @@
+import os
 import random
 
 import pytest
@@ -19,12 +20,51 @@ DDIM_STEPS = 50
 GUIDANCE_SCALE_CFG = 7.5
 DPL_STEPS = 20
 DPL_NTI_STEPS = 50
+IMAGE_SIZE = 512
 STABLE_DIFFUSION_VERSION = "runwayml/stable-diffusion-v1-5"
 # STABLE_DIFFUSION_VERSION = "CompVis/stable-diffusion-v1-4"
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help="Run slow tests",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--run-slow"):
+        skipper = pytest.mark.skip(reason="Only run when --run-slow is given")
+        for item in items:
+            if "slow" in item.keywords:
+                item.add_marker(skipper)
+
+@pytest.fixture
+def fig_dir():
+    dirname = "test/semantic_editing/figures" 
+    os.makedirs(dirname, exist_ok=True)
+    return dirname
+
 
 @pytest.fixture
 def seed():
     return SEED
+
+
+@pytest.fixture
+def image_size():
+    return IMAGE_SIZE
+
+
+@pytest.fixture
+def background_map_hps():
+    return {
+        "background_threshold": 0.2,
+        "algorithm": "kmeans",
+        "n_clusters": 5,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -69,36 +109,6 @@ def sd_adapter_fixture():
 
 
 @pytest.fixture
-def attention_store_accumulate():
-    return AttentionStoreAccumulate()
-
-
-@pytest.fixture
-def attention_store_timestep():
-    return AttentionStoreTimestep()
-
-
-@pytest.fixture
-def sd_adapter_with_attn_accumulate(attention_store_accumulate):
-    adapter = sd_adapter()
-    adapter.register_attention_control(
-        attention_store_accumulate,
-        AttendExciteCrossAttnProcessor,
-    )
-    return adapter
-
-
-@pytest.fixture
-def sd_adapter_with_attn_timestep(attention_store_timestep):
-    adapter = sd_adapter()
-    adapter.register_attention_control(
-        attention_store_timestep,
-        AttendExciteCrossAttnProcessor,
-    )
-    return adapter
-
-
-@pytest.fixture
 def image_prompt():
     # TODO: remove absolute path to cat mirror and change to relative path
     return Image.open("/vol/biomedic3/rrr2417/cxr-generation/test/semantic_editing/cat_mirror.jpeg"), "A cat sitting next to a mirror"
@@ -115,10 +125,10 @@ def image_prompt_girl_and_boy_trampoline():
 
 
 @pytest.fixture
-def dpl_1(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
+def dpl_1(sd_adapter_fixture, image_size):
     return DynamicPromptOptimisation(
-        sd_adapter_with_attn_timestep,
-        sd_adapter_with_attn_accumulate,
+        sd_adapter_fixture,
+        image_size=image_size,
         guidance_scale=GUIDANCE_SCALE_CFG,
         num_inner_steps_dpl=DPL_STEPS,
         num_inner_steps_nti=DPL_NTI_STEPS,
@@ -131,10 +141,10 @@ def dpl_1(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
 
 
 @pytest.fixture
-def dpl_2(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
+def dpl_2(sd_adapter_fixture, image_size):
     return DynamicPromptOptimisation(
-        sd_adapter_with_attn_timestep,
-        sd_adapter_with_attn_accumulate,
+        sd_adapter_fixture,
+        image_size=image_size,
         guidance_scale=GUIDANCE_SCALE_CFG,
         num_inner_steps_dpl=DPL_STEPS,
         num_inner_steps_nti=DPL_NTI_STEPS,
@@ -149,10 +159,10 @@ def dpl_2(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
 
 
 @pytest.fixture
-def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate, seed):
+def dpl_3(sd_adapter_fixture, image_size, seed, background_map_hps):
     return DynamicPromptOptimisation(
-        sd_adapter_with_attn_timestep,
-        sd_adapter_with_attn_accumulate,
+        sd_adapter_fixture,
+        image_size=image_size,
         guidance_scale=GUIDANCE_SCALE_CFG,
         num_inner_steps_dpl=DPL_STEPS,
         num_inner_steps_nti=DPL_NTI_STEPS,
@@ -162,20 +172,21 @@ def dpl_3(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate, seed):
         background_leakage_coeff=0.05,
         background_leakage_alpha=50,
         background_leakage_beta=0.9,
+        background_clusters_threshold=background_map_hps["background_threshold"],
+        clustering_algorithm=background_map_hps["algorithm"],
+        max_clusters=background_map_hps["n_clusters"],
+        clustering_random_state=seed,
         disjoint_object_coeff=0.05,
         disjoint_object_alpha=25,
         disjoint_object_beta=0.9,
-        max_clusters=5,
-        clustering_algorithm="kmeans",
-        clustering_random_state=seed,
     )
 
 
 @pytest.fixture
-def nti(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
+def nti(sd_adapter_fixture, image_size):
     return DynamicPromptOptimisation(
-        sd_adapter_with_attn_timestep,
-        sd_adapter_with_attn_accumulate,
+        sd_adapter_fixture,
+        image_size=image_size,
         guidance_scale=GUIDANCE_SCALE_CFG,
         num_inner_steps_dpl=DPL_STEPS,
         num_inner_steps_nti=DPL_NTI_STEPS,
@@ -186,6 +197,11 @@ def nti(sd_adapter_with_attn_timestep, sd_adapter_with_attn_accumulate):
 
 
 @pytest.fixture
-def cfg_ddim(sd_adapter_with_attn_accumulate):
-    return CFGWithDDIM(sd_adapter_with_attn_accumulate, guidance_scale=1, image_size=512)
+def cfg_ddim(sd_adapter_fixture, image_size):
+    return CFGWithDDIM(
+        sd_adapter_fixture,
+        guidance_scale=1,
+        image_size=image_size,
+        attention_accumulate=True,
+    )
 

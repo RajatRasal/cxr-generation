@@ -1,9 +1,12 @@
+import os
+
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from semantic_editing.attention import AttentionStoreAccumulate, AttendExciteCrossAttnProcessor
 from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_masks, find_noun_indices, localise_nouns, background_mask
 from semantic_editing.utils import plot_image_on_axis, save_figure
 
@@ -11,11 +14,12 @@ from semantic_editing.utils import plot_image_on_axis, save_figure
 def test_visualise_attention_maps_pca(
     cfg_ddim,
     image_prompt_cat_and_dog,
-    attention_store_accumulate,
     jet_cmap,
+	fig_dir,
 ):
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
+    attention_store_accumulate = cfg_ddim.model.get_attention_store()
 
     fig1, axes1 = plt.subplots(nrows=3, ncols=4)
     fig2, axes2 = plt.subplots(nrows=3, ncols=4)
@@ -51,20 +55,22 @@ def test_visualise_attention_maps_pca(
         ax2.text(**kwargs)
         ax3.text(**kwargs)
 
-    save_figure(fig1, "ddim_inversion_attn_pca_proj.pdf")
-    save_figure(fig2, "ddim_inversion_attn_kmeans.pdf")
-    save_figure(fig3, "ddim_inversion_attn_bgmm.pdf")
+    save_figure(fig1, os.path.join(fig_dir, "ddim_inversion_attn_pca_proj.pdf"))
+    save_figure(fig2, os.path.join(fig_dir, "ddim_inversion_attn_kmeans.pdf"))
+    save_figure(fig3, os.path.join(fig_dir, "ddim_inversion_attn_bgmm.pdf"))
 
 
 def test_visualise_cross_attention_maps_nouns_clustering(
     cfg_ddim,
     image_prompt_cat_and_dog,
-    attention_store_accumulate,
+    jet_cmap,
     seed,
+	fig_dir,
 ):
     # TODO: Make this test display figure 4 from the paper
     image, prompt = image_prompt_cat_and_dog
     cfg_ddim.fit(image, prompt)
+    attention_store_accumulate = cfg_ddim.model.get_attention_store()
 
     # Self-Attention
     self_attn_avg = attention_store_accumulate.aggregate_attention(
@@ -113,5 +119,5 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     for i, (k, v) in enumerate(masks.items()):
         plot_image_on_axis(axes[background_index + i + 1], v, f"Foreground: {k.capitalize()}")
 
-    save_figure(fig, "ddim_inversion_attn_maps.pdf")
+    save_figure(fig, os.path.join(fig_dir, "ddim_inversion_attn_maps.pdf"))
 

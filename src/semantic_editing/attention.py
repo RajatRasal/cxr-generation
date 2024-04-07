@@ -70,8 +70,6 @@ class AttentionStore(ABC):
             self._cur_att_layer = 0
             self._between_steps()
 
-        self._edit(attn, is_cross)
-
     @abstractmethod
     def _step_store(
         self,
@@ -83,10 +81,6 @@ class AttentionStore(ABC):
         key: torch.FloatTensor,
         value: torch.FloatTensor,
     ):
-        raise NotImplementedError
-
-    @abstractmethod
-    def _edit(self, attn: torch.FloatTensor, is_cross: bool):
         raise NotImplementedError
 
     @abstractmethod
@@ -142,13 +136,6 @@ class AttentionStore(ABC):
 
 class AttentionStoreTimestep(AttentionStore):
 
-    def _edit_step(
-        self,
-        attn: torch.FloatTensor,
-        is_cross: bool,
-    ):
-        raise NotImplementedError(f"_edit_step should not be called for {self.__class__.__name__}")
-
     def _accumulate(self, item: List[torch.FloatTensor], res: int) -> List[torch.FloatTensor]:
         return [_unflatten_attn_map(_item, res) for _item in item]
 
@@ -180,13 +167,6 @@ class AttentionStoreTimestep(AttentionStore):
     
 
 class AttentionStoreAccumulate(AttentionStore):
-
-    def _edit_step(
-        self,
-        attn: torch.FloatTensor,
-        is_cross: bool,
-    ):
-        raise NotImplementedError(f"_edit_step should not be called for {self.__class__.__name__}")
 
     def _accumulate(self, item: torch.FloatTensor, res: int) -> List[torch.FloatTensor]:
         return [_unflatten_attn_map(item, res)]
@@ -229,22 +209,63 @@ class AttentionStoreAccumulate(AttentionStore):
         return average_attention
 
 
-class AttentionStoreEdit(AttentionStore):
+class AttentionStoreEdit(AttentionStore, ABC):
 
-    def __init__(self, ddim_steps: int):
+    def __init__(self, ddim_steps: int, cross_replace_steps: int, self_replace_steps: int, indices_to_edit: List[int]):
         super().__init__()
         self.ddim_steps = ddim_steps
+        self.cross_replace_steps = cross_replace_steps
+        self.self_replace_steps = self_replace_steps
+        self.indices_to_edit = indices_to_edit
         self._cur_step_index = 0
 
-    def _edit_step(
+    @abstractmethod
+    def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _self_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
+        raise NotImplementedError
+
+    @abstractmethod
+    def __call__(
         self,
         attn: torch.FloatTensor,
         is_cross: bool,
-    ):
-        raise NotImplementedError
+        place_in_unet: str,
+        hidden_states: torch.FloatTensor,
+        query: torch.FloatTensor,
+        key: torch.FloatTensor,
+        value: torch.FloatTensor,
+    ) -> torch.FloatTensor:
+        super().__call__(
+            attn,
+            is_cross,
+            place_in_unet,
+            hidden_states,
+            query,
+            key,
+            value,
+        )
+        return self._edit(attn, is_cross)
+
+    def _edit(
+        self,
+        attn: torch.FloatTensor,
+        is_cross: bool,
+    ) -> torch.FloatTensor:
+        if is_cross and self._cur_step_index < self.cross_replace_steps:
+            attn = self._cross_attention_edit_step(attn)
+        elif (not is_cross) and self._cur_step_index < self.self_replace_steps:
+            attn = self._self_attention_edit_step(attn)
+
+        if self._cur_step_index == self.ddim_steps:
+            self._cur_step_index = 0
+
+        return attn
 
     def _accumulate(self, item: torch.FloatTensor, res: int) -> List[torch.FloatTensor]:
-        raise NotImplementedError
+        return [_unflatten_attn_map(_item, res) for _item in item]
 
     def _between_steps(self):
         self.attention_store = self.step_store
@@ -254,26 +275,47 @@ class AttentionStoreEdit(AttentionStore):
     def _get_average_attention(self):
         return self.attention_store
 
+    def aggregate_attention(
+        self,
+        places_in_unet: List[PLACE_IN_UNET],
+        res: int,
+        is_cross: bool,
+        element_name: ATTENTION_COMPONENT,
+    ) -> torch.FloatTensor:
+        raise NotImplementedError
 
-class AttnProcessorWithAttentionStore(ABC):
+
+class AttentionStoreReplace(AttentionStoreEdit):
+
+    def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
+        raise NotImplementedError
+
+    def _self_attention_edit_step(self, attn: torch.FloatTensor):
+        raise NotImplementedError
+
+
+class AttentionStoreReweight(AttentionStoreEdit):
+
+    def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
+        raise NotImplementedError
+        # C, H, W = attn.shape
+        # attn_ = attn_.reshape(4, C // 4, H, W)
+        # attn_replace = attn_[2].clone()
+        # for i in self.indices_to_edit:
+        #     attn_replace[:, :, i] *= 2
+        # attn_[3] = attn_replace
+        # return attn_.reshape(C, H, W)
+
+    def _self_attention_edit_step(self, attn: torch.FloatTensor):
+        raise NotImplementedError
+
+
+class AttnProcessorWithAttentionStore:
 
     def __init__(self, attention_store: AttentionStore, place_in_unet: PLACE_IN_UNET):
         self.attention_store = attention_store
         self.attention_store.register_attention_processor()
         self.place_in_unet = place_in_unet
-
-    @abstractmethod
-    def store_attention_maps(
-        self,
-        attention_probs,
-        is_cross,
-        place_in_unet,
-        hidden_states,
-        query,
-        key,
-        value,
-    ):
-        raise NotImplementedError
 
     def __call__(
         self,
@@ -300,7 +342,8 @@ class AttnProcessorWithAttentionStore(ABC):
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
         # Only need to store attention maps during the Attend and Excite process
-        self.store_attention_maps(
+        # TODO: Refactor this so that we aren't checking for the None condition
+        res = self.attention_store(
             attention_probs,
             is_cross,
             self.place_in_unet,
@@ -309,6 +352,10 @@ class AttnProcessorWithAttentionStore(ABC):
             key,
             value,
         )
+        # TODO: This is only None at prediction time. So could refactor this better
+        # so we're not always checking the conditons below.
+        if res is not None:
+            attention_probs = res
 
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
@@ -320,59 +367,6 @@ class AttnProcessorWithAttentionStore(ABC):
 
         return hidden_states
 
-
-class AttendExciteCrossAttnProcessor(AttnProcessorWithAttentionStore):
-
-    def store_attention_maps(
-        self,
-        attention_probs,
-        is_cross,
-        place_in_unet,
-        hidden_states,
-        query,
-        key,
-        value,
-    ):
-        self.attention_store(
-            attention_probs,
-            is_cross,
-            self.place_in_unet,
-            hidden_states,
-            query,
-            key,
-            value,
-        )
-
-
-class AttendExciteCrossAttnProcessorP2P:
-
-    def __init__(self, attention_store: AttentionStore, place_in_unet: PLACE_IN_UNET, cross_replace_step: int, self_replace_step: int):
-        super().__init__(attention_store, place_in_unet)
-        self.cross_replace_step = cross_replace_step
-        self.self_replace_step = self_replace_step
-
-    def store_attention_maps(
-        self,
-        attention_probs,
-        is_cross,
-        place_in_unet,
-        hidden_states,
-        query,
-        key,
-        value,
-    ):
-        self.attention_store(
-            attention_probs,
-            is_cross,
-            self.place_in_unet,
-            hidden_states,
-            query,
-            key,
-            value,
-            self.cross_replace_step,
-            self.self_replace_step,
-        )
- 
 
 def prepare_unet(unet: UNet2DConditionModel) -> UNet2DConditionModel:
     for name in unet.attn_processors.keys():

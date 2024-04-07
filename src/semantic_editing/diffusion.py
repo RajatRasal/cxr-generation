@@ -1,3 +1,5 @@
+import os
+import pickle
 from abc import ABC, abstractmethod
 from typing import List, Literal, Optional, Type, Union
 
@@ -9,7 +11,7 @@ from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeli
 from torch.optim import Adam
 from tqdm import tqdm
 
-from semantic_editing.attention import AttentionStore, AttendExciteCrossAttnProcessor, prepare_unet
+from semantic_editing.attention import AttentionStore, AttnProcessorWithAttentionStore, prepare_unet
 
 
 class StableDiffusionAdapter:
@@ -25,7 +27,8 @@ class StableDiffusionAdapter:
         self.tokenizer = self.model.tokenizer
         self.vae = self.model.vae
         self.unet = self.model.unet
-        if prepare_unet_for_editing:
+        self.prepare_unet_for_editing = prepare_unet_for_editing
+        if self.prepare_unet_for_editing:
             self.unet = prepare_unet(self.unet)
         self.device = self.model.device
         self._original_embeddings = self.get_embeddings().weight.data.clone()
@@ -128,7 +131,7 @@ class StableDiffusionAdapter:
     def register_attention_store(
         self,
         attention_store: AttentionStore,
-        attention_processor_type: Type[AttendExciteCrossAttnProcessor],
+        attention_processor_type: Type[AttnProcessorWithAttentionStore],
     ):
         self.attention_store = attention_store
         attention_processors = {}
@@ -152,6 +155,23 @@ class StableDiffusionAdapter:
 
     def reset_attention_store(self):
         self.attention_store = None
+
+    def save(self, dirname: str):
+        os.makedirs(dirname, exist_ok=True)
+        self.model.save_pretrained(os.path.join(dirname, "model"))
+        kwargs = {
+            "ddim_steps": self.ddim_steps,
+            "prepare_unet_for_editing": self.prepare_unet_for_editing,
+        }
+        with open(os.path.join(dirname, "kwargs"), "wb") as f:
+            pickle.dump(kwargs, f)
+
+    @classmethod
+    def load(cls, dirname: str) -> "StableDiffusionAdapter":
+        model = StableDiffusionPipeline.from_pretrained(os.path.join(dirname, "model"))
+        with open(os.path.join(dirname, "kwargs"), "rb") as f:
+            kwargs = pickle.load(f)
+        return cls(model, **kwargs)
 
 
 @torch.no_grad()

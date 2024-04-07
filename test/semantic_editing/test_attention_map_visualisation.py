@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttendExciteCrossAttnProcessor
+from semantic_editing.attention import AttentionStoreAccumulate, AttnProcessorWithAttentionStore
 from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_masks, find_noun_indices, localise_nouns, background_mask
 from semantic_editing.utils import plot_image_on_axis, save_figure
 

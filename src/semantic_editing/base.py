@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractclassmethod
 from typing import List
 
 import torch
@@ -28,5 +28,13 @@ class CFGOptimisation(ABC):
 
     @abstractmethod
     def generate(self, prompt: str) -> Image.Image:
-        pass
+        raise NotImplementedError
+
+    @abstractmethod
+    def save(self, dirname: str):
+        raise NotImplementedError
+
+    @abstractclassmethod
+    def load(cls, dirname: str) -> "CFGOptimisation":
+        raise NotImplementedError
 

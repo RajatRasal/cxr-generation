@@ -8,7 +8,7 @@ import torch
 from PIL import Image
 from diffusers import StableDiffusionPipeline
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttendExciteCrossAttnProcessor
+from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttnProcessorWithAttentionStore
 from semantic_editing.classifier_free_guidance import CFGWithDDIM
 from semantic_editing.diffusion import StableDiffusionAdapter
 from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
@@ -41,9 +41,17 @@ def pytest_collection_modifyitems(config, items):
             if "slow" in item.keywords:
                 item.add_marker(skipper)
 
+
 @pytest.fixture
 def fig_dir():
     dirname = "test/semantic_editing/figures" 
+    os.makedirs(dirname, exist_ok=True)
+    return dirname
+
+
+@pytest.fixture
+def weights_dir():
+    dirname = "test/semantic_editing/weights" 
     os.makedirs(dirname, exist_ok=True)
     return dirname
 

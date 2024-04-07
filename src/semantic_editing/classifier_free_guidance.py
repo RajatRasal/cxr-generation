@@ -2,7 +2,7 @@ from typing import Optional
 
 from PIL import Image
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttendExciteCrossAttnProcessor
+from semantic_editing.attention import AttentionStoreAccumulate, AttnProcessorWithAttentionStore
 from semantic_editing.base import CFGOptimisation
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, ddim_inversion
 
@@ -28,7 +28,7 @@ class CFGWithDDIM(CFGOptimisation):
         if self.attention_accumulate:
             self.model.register_attention_store(
                 AttentionStoreAccumulate(),
-                AttendExciteCrossAttnProcessor,
+                AttnProcessorWithAttentionStore,
             )
 
         self.latent_T = ddim_inversion(self.model, image, prompt)[-1]
@@ -40,7 +40,7 @@ class CFGWithDDIM(CFGOptimisation):
         if self.attention_accumulate:
             self.model.register_attention_store(
                 AttentionStoreAccumulate(),
-                AttendExciteCrossAttnProcessor,
+                AttnProcessorWithAttentionStore,
             )
 
         latents = classifier_free_guidance(
@@ -53,4 +53,10 @@ class CFGWithDDIM(CFGOptimisation):
 
         image = self.model.decode_latent(latent_0)
         return image
+
+    def load(cls, dirname: str) -> "CFGWithDDIM":
+        raise NotImplementedError
+
+    def save(dirname: str):
+        raise NotImplementedError
 

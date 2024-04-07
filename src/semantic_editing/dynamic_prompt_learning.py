@@ -1,4 +1,6 @@
 import math
+import os
+import pickle
 from typing import List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -11,7 +13,7 @@ from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeli
 from torch.optim import Adam
 from tqdm import tqdm
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttendExciteCrossAttnProcessor, AttendExciteCrossAttnProcessorP2P
+from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttnProcessorWithAttentionStore
 from semantic_editing.base import CFGOptimisation, NULL_STRING
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
@@ -152,7 +154,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Use AttentionStoreAccumulate for background map prediction
         self.model.register_attention_store(
             AttentionStoreAccumulate(),
-            AttendExciteCrossAttnProcessor,
+            AttnProcessorWithAttentionStore,
         )
 
         # DDIM inversion to compute latents
@@ -161,7 +163,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
         # Find noun tokens
         index_noun_pairs = find_noun_indices(self.model, prompt)
-        noun_indices = [i for i, _ in index_noun_pairs]
+        self.noun_indices = [i for i, _ in index_noun_pairs]
 
         # Compute background mask from attention maps stored during DDIM inversion.
         if self.background_leakage_coeff > 0:
@@ -178,7 +180,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Select indices for words in the text encoder that should not be
         # updated during the DPL procedure, i.e. indices that are not present
         # in the tokenised sentence.
-        self.noun_token_ids = self.model.tokenise_text(prompt).flatten()[noun_indices].unique(sorted=True)
+        self.noun_token_ids = self.model.tokenise_text(prompt).flatten()[self.noun_indices].unique(sorted=True)
 
         # NTI in outer loop, DPL in inner loop.
         dpl_attention_maps = []
@@ -194,7 +196,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         # Use AttentionStoreTimestep for DPL + NTI optimisations
         self.model.register_attention_store(
             AttentionStoreTimestep(),
-            AttendExciteCrossAttnProcessor,
+            AttnProcessorWithAttentionStore,
         )
 
         for i in range(n_timesteps):
@@ -228,7 +230,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 if self.attention_balancing_coeff > 0:
                     loss_at = self._loss_attention_balancing(
                         avg_cross_attn_maps,
-                        noun_indices,
+                        self.noun_indices,
                     )
                 else:
                     loss_at = torch.Tensor([0.0]).to(self.model.device)
@@ -236,7 +238,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 if self.background_leakage_coeff > 0:
                     loss_bg = self._loss_background_leakage(
                         avg_cross_attn_maps,
-                        noun_indices,
+                        self.noun_indices,
                         bg_map,
                     )
                 else:
@@ -245,7 +247,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                 if self.disjoint_object_coeff > 0:
                     loss_dj = self._loss_disjoint_object(
                         avg_cross_attn_maps,
-                        noun_indices,
+                        self.noun_indices,
                     )
                 else:
                     loss_dj = torch.Tensor([0.0]).to(self.model.device)
@@ -326,6 +328,68 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
         return dpl_attention_maps
 
+    def save(self, dirname: str):
+        if not (
+            hasattr(self, "null_embeddings") and \
+            hasattr(self, "latents") and \
+            hasattr(self, "prompt_noun_embeddings") and \
+            hasattr(self, "noun_token_ids") and \
+            hasattr(self, "noun_indices")
+        ):
+            raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
+
+        os.makedirs(dirname, exist_ok=True)
+
+        torch.save(self.null_embeddings, os.path.join(dirname, "null_embeddings")) 
+        torch.save(self.latents, os.path.join(dirname, "latents"))
+        torch.save(self.prompt_noun_embeddings, os.path.join(dirname, "prompt_noun_embeddings"))
+        torch.save(self.noun_token_ids, os.path.join(dirname, "noun_token_ids"))
+        torch.save(self.noun_indices, os.path.join(dirname, "noun_indices"))
+
+        self.model.save(os.path.join(dirname, "model_wrapper"))
+
+        hyperparameters = {
+            "guidance_scale": self.guidance_scale,
+            "num_inner_steps_dpl": self.num_inner_steps_dpl,
+            "num_inner_steps_nti": self.num_inner_steps_nti,
+            "learning_rate": self.learning_rate,
+            "image_size": self.image_size,
+            "epsilon": self.epsilon,
+            "attention_resolution": self.attention_resolution,
+            "attention_balancing_coeff": self.attention_balancing_coeff,
+            "attention_balancing_alpha": self.attention_balancing_alpha,
+            "attention_balancing_beta": self.attention_balancing_beta,
+            "attention_balancing_smoothing_kernel_sigma": self.attention_balancing_smoothing_kernel_sigma,
+            "disjoint_object_coeff": self.disjoint_object_coeff,
+            "disjoint_object_alpha": self.disjoint_object_alpha,
+            "disjoint_object_beta": self.disjoint_object_beta,
+            "background_leakage_coeff": self.background_leakage_coeff,
+            "background_leakage_alpha": self.background_leakage_alpha,
+            "background_leakage_beta": self.background_leakage_beta,
+            "background_clusters_threshold": self.background_clusters_threshold,
+            "clustering_algorithm": self.clustering_algorithm,
+            "max_clusters": self.max_clusters,
+            "clustering_random_state": self.clustering_random_state,
+        }
+        with open(os.path.join(dirname, "hyperparameters.pickle"), "wb") as f:
+            pickle.dump(hyperparameters, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @classmethod
+    def load(cls, dirname: str) -> "DynamicPromptOptimisation":
+        with open(os.path.join(dirname, "hyperparameters.pickle"), "rb") as f:
+            hyperparameters = pickle.load(f)
+        model = StableDiffusionAdapter.load(os.path.join(dirname, "model_wrapper"))
+
+        dpl = cls(model=model, **hyperparameters)
+
+        dpl.null_embeddings = torch.load(os.path.join(dirname, "null_embeddings")) 
+        dpl.latents = torch.load(os.path.join(dirname, "latents"))
+        dpl.prompt_noun_embeddings = torch.load(os.path.join(dirname, "prompt_noun_embeddings"))
+        dpl.noun_token_ids = torch.load(os.path.join(dirname, "noun_token_ids"))
+        dpl.noun_indices = torch.load(os.path.join(dirname, "noun_indices"))
+
+        return dpl
+
     @torch.no_grad()
     def generate(
         self,
@@ -337,7 +401,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
             hasattr(self, "null_embeddings") and \
             hasattr(self, "latents") and \
             hasattr(self, "prompt_noun_embeddings") and \
-            hasattr(self, "noun_token_ids")
+            hasattr(self, "noun_token_ids") and \
+            hasattr(self, "noun_indices")
         ):
             raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
         
@@ -347,12 +412,12 @@ class DynamicPromptOptimisation(CFGOptimisation):
         if edit == "replace":
             self.model.register_attention_store(
                 AttentionStoreReplace(),
-                AttendExciteCrossAttnProcessorP2P,
+                AttnProcessorWithAttentionStore,
             )
         elif edit == "reweight":
             self.model.register_attention_store(
-                AttentionStoreReweight(),
-                AttendExciteCrossAttnProcessorP2P,
+                AttentionStoreReweight(self.ddim_steps, 40, 100000, self.noun_indices),
+                AttnProcessorWithAttentionStore,
             )
         elif edit == "recon":
             pass

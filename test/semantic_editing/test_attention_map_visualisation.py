@@ -50,6 +50,7 @@ def test_visualise_attention_maps_pca(
         kwargs = {"x": -100, "y": 400, "s": f"{res_name} x {res_name}", "rotation": 90}
         ax1.text(**kwargs)
 
+    # TODO: Fix the positioning of the axis titles
     for ax2, ax3, res_name in zip(axes2[:, 0], axes3[:, 0], res_names):
         kwargs = {"x": -100, "y": 400, "s": f"{res_name} x {res_name}", "rotation": 90}
         ax2.text(**kwargs)
@@ -62,13 +63,14 @@ def test_visualise_attention_maps_pca(
 
 def test_visualise_cross_attention_maps_nouns_clustering(
     cfg_ddim,
-    image_prompt_cat_and_dog,
+    image_prompt_pear_and_apple,
     jet_cmap,
     seed,
 	fig_dir,
+    background_map_hps,
 ):
-    # TODO: Make this test display figure 4 from the paper
-    image, prompt = image_prompt_cat_and_dog
+    # TODO: Make this test display figure 4 from the paper - include failure case
+    image, prompt = image_prompt_pear_and_apple
     cfg_ddim.fit(image, prompt)
     attention_store_accumulate = cfg_ddim.model.get_attention_store()
 
@@ -80,7 +82,12 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         element_name="attn",
     )
     self_attn_avg_proj = attention_map_pca(self_attn_avg, n_components=3, normalise=True)
-    self_attn_avg_clusters = attention_map_cluster(self_attn_avg, algorithm="kmeans", n_clusters=5, random_state=seed)
+    self_attn_avg_clusters = attention_map_cluster(
+        self_attn_avg,
+        algorithm=background_map_hps["algorithm"],
+        n_clusters=background_map_hps["n_clusters"],
+        random_state=seed,
+    )
 
     # Cross-Attention
     cross_attn_avg = attention_store_accumulate.aggregate_attention(
@@ -95,12 +102,13 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     masks = find_masks(
         attention_store_accumulate,
         noun_indices,
-        0.2,
-        "kmeans",
-        5,
         random_state=seed,
+        **background_map_hps,
     )
-    masks = {k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8)) for k, v in masks.items()}
+    masks = {
+        k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8))
+        for k, v in masks.items()
+    }
 
     # (original, self-attn, self-attn cluster, cross-attn cat, cross-attn dog, background, foreground cat, foreground dog)
     fig, axes = plt.subplots(nrows=1, ncols=8, figsize=(15, 5))
@@ -113,6 +121,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     for i, (noun_index, noun) in enumerate(noun_indices):
         plot_image_on_axis(axes[noun_base_index + i], cross_attn_avg[:, :, noun_index].cpu().numpy(), f"Cross-Attn: {noun.capitalize()}")
 
+    # TODO: display these images in black and white
     background_index = 5
     plot_image_on_axis(axes[background_index], masks["BG"], "Background")
     del masks["BG"]

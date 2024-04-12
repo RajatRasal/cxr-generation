@@ -1,10 +1,11 @@
 import os
 import pickle
 from abc import ABC, abstractmethod
-from typing import List, Literal, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union
 
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as F_vision
 import numpy as np
 from PIL import Image
 from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeline
@@ -99,8 +100,14 @@ class StableDiffusionAdapter:
         timestep: int,
         embedding: torch.FloatTensor,
         zero_grad: bool = False,
+        **attn_processor_kwargs,
     ) -> torch.FloatTensor:
-        sample = self.unet(latent, timestep, encoder_hidden_states=embedding).sample
+        sample = self.unet(
+            latent,
+            timestep,
+            encoder_hidden_states=embedding,
+            cross_attention_kwargs=attn_processor_kwargs,
+        ).sample
         if zero_grad:
             self.unet.zero_grad()
         return sample
@@ -167,8 +174,8 @@ class StableDiffusionAdapter:
             pickle.dump(kwargs, f)
 
     @classmethod
-    def load(cls, dirname: str) -> "StableDiffusionAdapter":
-        model = StableDiffusionPipeline.from_pretrained(os.path.join(dirname, "model"))
+    def load(cls, dirname: str, device: Literal["cuda", "cpu"]) -> "StableDiffusionAdapter":
+        model = StableDiffusionPipeline.from_pretrained(os.path.join(dirname, "model")).to(device)
         with open(os.path.join(dirname, "kwargs"), "rb") as f:
             kwargs = pickle.load(f)
         return cls(model, **kwargs)
@@ -182,11 +189,57 @@ def classifier_free_guidance_step(
      null_embedding: torch.FloatTensor,
      timestep: int,
      guidance_scale: float = 7.5,
+     local: bool = False,
+     mask_attn_res: int = 16,
+     mask_pool_k: int = 1,
+     mask_indices: List[int] = [],
+     mask_threshold: float = 0.3,
+     cross_attention_kwargs_cond: Dict[str, Any] = {},
+     cross_attention_kwargs_uncond: Dict[str, Any] = {},
 ) -> torch.FloatTensor:
-    noise_pred_cond = model.get_noise_pred(latent, timestep, prompt_embedding)
-    noise_pred_uncond = model.get_noise_pred(latent, timestep, null_embedding)
+    noise_pred_cond = model.get_noise_pred(
+        latent,
+        timestep,
+        prompt_embedding,
+        False,
+        **cross_attention_kwargs_cond,
+    )
+    if local:
+        attention_store = model.get_attention_store()
+        attn_maps = attention_store.aggregate_attention(
+            places_in_unet=["up", "down", "mid"],
+            is_cross=True,
+            res=mask_attn_res,
+            element_name="attn",
+        )
+    noise_pred_uncond = model.get_noise_pred(
+        latent,
+        timestep,
+        null_embedding,
+        False,
+        **cross_attention_kwargs_uncond,
+    )
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
     latent = model.prev_step(noise_pred, timestep, latent)
+    if local:
+        # (8 * 2, mask_attn_res, mask_attn_res, len(mask_indices))
+        attn_maps = attn_maps[:, :, :, mask_indices]
+        # (2, 8, 1, mask_attn_res, mask_attn_res, len(mask_indices))
+        attn_maps = attn_maps.reshape(2, -1, 1, mask_attn_res, mask_attn_res, len(mask_indices))
+        # (2, 1, mask_attn_res, mask_attn_res)
+        mask = attn_maps.sum(-1).mean(1)
+        # (2, 1, mask_attn_res, mask_attn_res)
+        mask = F.max_pool2d(mask, kernel_size=(2 * mask_pool_k + 1, 2 * mask_pool_k + 1), stride=(1, 1), padding=(mask_pool_k, mask_pool_k))
+        # (2, 1, 64, 64) <-- 64 in the case of StableDiffusion
+        mask = F.interpolate(mask, size=(latent.shape[-1], latent.shape[-1]))
+        mask_max = mask.max(2, keepdims=True)[0].max(3, keepdims=True)[0]
+        mask = mask / mask_max
+        # (2, 1, 64, 64) in booleans
+        mask = mask.gt(mask_threshold)
+        mask = mask[:1] + mask
+        # (2, 1, 64, 64) in float
+        mask = mask.float()
+        latent = latent[:1] + mask * (latent - latent[:1])
     return latent
 
 

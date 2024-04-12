@@ -1,7 +1,7 @@
 import math
 import os
 import pickle
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Dict,List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,7 +13,7 @@ from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeli
 from torch.optim import Adam
 from tqdm import tqdm
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttnProcessorWithAttentionStore
+from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttnProcessorWithAttentionStore, AttentionStoreRefine
 from semantic_editing.base import CFGOptimisation, NULL_STRING
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
@@ -149,6 +149,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         return thresh_at, thresh_bg, thresh_dj
 
     def fit(self, image: Image.Image, prompt: str) -> List[torch.FloatTensor]:
+        self.prompt = prompt
+
         image = image.resize((self.image_size, self.image_size))
 
         # Use AttentionStoreAccumulate for background map prediction
@@ -162,14 +164,14 @@ class DynamicPromptOptimisation(CFGOptimisation):
         n_latents = len(self.latents)
 
         # Find noun tokens
-        index_noun_pairs = find_noun_indices(self.model, prompt)
-        self.noun_indices = [i for i, _ in index_noun_pairs]
+        self.index_noun_pairs = find_noun_indices(self.model, prompt)
+        self.noun_indices = [i for i, _ in self.index_noun_pairs]
 
         # Compute background mask from attention maps stored during DDIM inversion.
         if self.background_leakage_coeff > 0:
-            bg_map = background_mask(
+            self.bg_map = background_mask(
                 self.model.get_attention_store(),
-                index_noun_pairs,
+                self.index_noun_pairs,
                 background_threshold=self.background_clusters_threshold,
                 algorithm=self.clustering_algorithm,
                 n_clusters=self.max_clusters,
@@ -239,7 +241,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     loss_bg = self._loss_background_leakage(
                         avg_cross_attn_maps,
                         self.noun_indices,
-                        bg_map,
+                        self.bg_map,
                     )
                 else:
                     loss_bg = torch.Tensor([0.0]).to(self.model.device)
@@ -329,14 +331,18 @@ class DynamicPromptOptimisation(CFGOptimisation):
         return dpl_attention_maps
 
     def save(self, dirname: str):
+        # TODO: The list of properties saved here should be inferred automatically somehow
+        # we don't want to miss any incase we add new ones.
         if not (
             hasattr(self, "null_embeddings") and \
             hasattr(self, "latents") and \
             hasattr(self, "prompt_noun_embeddings") and \
             hasattr(self, "noun_token_ids") and \
-            hasattr(self, "noun_indices")
+            hasattr(self, "noun_indices") and \
+            hasattr(self, "prompt") and \
+            hasattr(self, "index_noun_pairs")
         ):
-            raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
+            raise ValueError(f"Need to fit {self.__class__.__name__} on a prompt-image pair before generating")
 
         os.makedirs(dirname, exist_ok=True)
 
@@ -345,6 +351,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         torch.save(self.prompt_noun_embeddings, os.path.join(dirname, "prompt_noun_embeddings"))
         torch.save(self.noun_token_ids, os.path.join(dirname, "noun_token_ids"))
         torch.save(self.noun_indices, os.path.join(dirname, "noun_indices"))
+        torch.save(self.prompt, os.path.join(dirname, "prompt"))
+        torch.save(self.index_noun_pairs, os.path.join(dirname, "index_noun_pairs"))
 
         self.model.save(os.path.join(dirname, "model_wrapper"))
 
@@ -375,26 +383,37 @@ class DynamicPromptOptimisation(CFGOptimisation):
             pickle.dump(hyperparameters, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, dirname: str) -> "DynamicPromptOptimisation":
+    def load(cls, dirname: str, device: Literal["cuda", "cpu"]) -> "DynamicPromptOptimisation":
         with open(os.path.join(dirname, "hyperparameters.pickle"), "rb") as f:
             hyperparameters = pickle.load(f)
-        model = StableDiffusionAdapter.load(os.path.join(dirname, "model_wrapper"))
+        model = StableDiffusionAdapter.load(os.path.join(dirname, "model_wrapper"), device)
 
         dpl = cls(model=model, **hyperparameters)
 
-        dpl.null_embeddings = torch.load(os.path.join(dirname, "null_embeddings")) 
+        dpl.null_embeddings = torch.load(os.path.join(dirname, "null_embeddings"))
         dpl.latents = torch.load(os.path.join(dirname, "latents"))
         dpl.prompt_noun_embeddings = torch.load(os.path.join(dirname, "prompt_noun_embeddings"))
         dpl.noun_token_ids = torch.load(os.path.join(dirname, "noun_token_ids"))
         dpl.noun_indices = torch.load(os.path.join(dirname, "noun_indices"))
+        dpl.prompt = torch.load(os.path.join(dirname, "prompt"))
+        dpl.index_noun_pairs = torch.load(os.path.join(dirname, "index_noun_pairs"))
 
         return dpl
+
+    def get_index_noun_pairs(self) -> List[Tuple[int, str]]:
+        if not hasattr(self, "index_noun_pairs"):
+            raise ValueError(f"Need to fit {self.__class__.__name__} on a prompt-image pair before index_noun_pairs are available")
+        return self.index_noun_pairs
 
     @torch.no_grad()
     def generate(
         self,
-        prompt: str,
-        edit: Literal["recon", "replace", "reweight"] = "recon",
+        swaps: Optional[Dict[str, str]] = None,
+        weights: Optional[Dict[str, str]] = None,
+        cross_replace_steps: Optional[int] = None,
+        self_replace_steps: Optional[int] = None,
+        local: bool = False,
+        local_mask_threshold: float = 0.3,
     ) -> Image.Image:
         # TODO: This currently assumes reconstruction. Change this to implement object editing.
         if not (
@@ -402,27 +421,25 @@ class DynamicPromptOptimisation(CFGOptimisation):
             hasattr(self, "latents") and \
             hasattr(self, "prompt_noun_embeddings") and \
             hasattr(self, "noun_token_ids") and \
-            hasattr(self, "noun_indices")
+            hasattr(self, "noun_indices") and \
+            hasattr(self, "prompt") and \
+            hasattr(self, "index_noun_pairs")
         ):
             raise ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
+
+        if cross_replace_steps is None:
+            cross_replace_steps = float("-inf")
+        if self_replace_steps is None:
+            self_replace_steps = float("-inf")
+
+        if weights is not None or swaps is not None:
+            if cross_replace_steps > self.model.ddim_steps:
+                raise ValueError(f"cross_replace_steps {cross_replace_steps} must be less than or equal to model.ddim_steps {self.model.ddim_steps}")
+            if self_replace_steps > self.model.ddim_steps:
+                raise ValueError(f"self_replace_steps {self_replace_steps} must be less than or equal to model.ddim_steps {self.model.ddim_steps}")
         
         self.model.reset_embeddings()
         self.model.reset_attention_store()
-
-        if edit == "replace":
-            self.model.register_attention_store(
-                AttentionStoreReplace(),
-                AttnProcessorWithAttentionStore,
-            )
-        elif edit == "reweight":
-            self.model.register_attention_store(
-                AttentionStoreReweight(self.ddim_steps, 40, 100000, self.noun_indices),
-                AttnProcessorWithAttentionStore,
-            )
-        elif edit == "recon":
-            pass
-        else:
-            raise ValueError(f"{edit} is not a valid editing method")
 
         # TODO: Move this into model adapter
         latent = self.latents[-1].expand(
@@ -432,21 +449,77 @@ class DynamicPromptOptimisation(CFGOptimisation):
             self.image_size // 8,
         ).to(self.model.device)
 
-        for i, timestep in enumerate(tqdm(self.model.get_timesteps())):
-            self.model.set_text_embeddings(self.prompt_noun_embeddings[i], self.noun_token_ids)
-            target_prompt_embedding = self.model.encode_text(prompt)
-            latent = classifier_free_guidance_step(
-                self.model,
-                latent,
-                target_prompt_embedding,
-                self.null_embeddings[i],
-                timestep,
-                self.guidance_scale,
+        if swaps is not None:
+            edit_prompt = self.prompt
+            for k, v in swaps.items():
+                edit_prompt = edit_prompt.replace(k, v)
+
+        if weights is not None:
+            amplify_indices = {
+                index: weights[noun]
+                for index, noun in self.index_noun_pairs
+                if noun in weights
+            }
+
+        refine = weights is not None or swaps is not None
+
+        if refine:
+            self.model.register_attention_store(
+                AttentionStoreRefine(),
+                AttnProcessorWithAttentionStore,
             )
+            latent = latent.repeat(2, 1, 1, 1)
+        else:
+            pass
+
+        for i, timestep in enumerate(tqdm(self.model.get_timesteps())):
+            # TODO: Only set this if all coefficients != 0
+            if not (
+                self.attention_balancing_coeff == 0 and \
+                self.disjoint_object_coeff == 0 and \
+                self.background_leakage_coeff == 0
+            ):
+                self.model.set_text_embeddings(
+                    self.prompt_noun_embeddings[i].to(self.model.device),
+                    self.noun_token_ids,
+                )
+            if refine:
+                prompt_embedding = self.model.encode_text(self.prompt)
+                edit_embedding = self.model.encode_text(edit_prompt)
+                embeddings = torch.cat([prompt_embedding, edit_embedding])
+                cross_attention_kwargs_cond = {
+                    "cross_replace": i < cross_replace_steps,
+                    "self_replace": i < self_replace_steps,
+                    "amplify_indices": amplify_indices
+                }
+                latent = classifier_free_guidance_step(
+                    model=self.model,
+                    latent=latent,
+                    prompt_embedding=embeddings,
+                    null_embedding=self.null_embeddings[i].to(self.model.device).repeat(2, 1, 1),
+                    timestep=timestep,
+                    guidance_scale=self.guidance_scale,
+                    local=local,
+                    mask_attn_res=self.attention_resolution,
+                    mask_indices=self.noun_indices,
+                    mask_threshold=local_mask_threshold,
+                    cross_attention_kwargs_cond=cross_attention_kwargs_cond,
+                ).detach()
+            else:
+                target_prompt_embedding = self.model.encode_text(self.prompt)
+                latent = classifier_free_guidance_step(
+                    self.model,
+                    latent,
+                    target_prompt_embedding,
+                    self.null_embeddings[i].to(self.model.device),
+                    timestep,
+                    self.guidance_scale,
+                )
 
         self.model.reset_embeddings()
         self.model.reset_attention_store()
 
+        latent = latent[1].unsqueeze(0) if refine else latent
         image = self.model.decode_latent(latent)
         return image
 

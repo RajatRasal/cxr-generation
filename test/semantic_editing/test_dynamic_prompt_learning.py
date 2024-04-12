@@ -10,14 +10,27 @@ from sklearn.decomposition import PCA
 
 from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
 from semantic_editing.tools import attention_map_pca, attention_map_cluster, attention_map_upsample, find_noun_indices, localise_nouns, normalise_image, stable_diffusion_tokens
-from semantic_editing.utils import plot_image_on_axis, save_figure, seed_everything
+from semantic_editing.utils import plot_image_on_axis, save_figure, seed_everything, device_availability
 
 
-def _fit(gen, image, prompt, file_name, weights_location):
+def _fit(gen, image, prompt, weights_location):
     attn_maps = gen.fit(image, prompt)
-    image.save(file_name)
     gen.save(weights_location)
     return attn_maps
+
+
+def _edit(gen, swaps, weights, name, fig_dir, local):
+    edit = gen.generate(
+        swaps=swaps,
+        weights=weights,
+        cross_replace_steps=40,
+        self_replace_steps=20,
+        local=local,
+    )
+    swaps_str = "_".join([f"{k}_{v}" for k, v in swaps.items()]) + \
+        "_" + \
+        "_".join([f"{k}_{v}" for k, v in weights.items()])
+    edit.save(os.path.join(fig_dir, f"{name}_edit_{swaps_str}.pdf"))
 
 
 def _visualise_ca_maps(gen, cross_attn_avg: torch.FloatTensor, prompt: str, file_name: str):
@@ -40,11 +53,15 @@ def _visualise_ca_maps(gen, cross_attn_avg: torch.FloatTensor, prompt: str, file
     save_figure(fig, file_name)
 
 
-def _test(model, image_and_prompt, recon_name, cross_attn_name, weight_location_name):
+def _test(model, image_and_prompt, cross_attn_name, weight_location_name):
     image, prompt = image_and_prompt
-    attn_maps = _fit(model, image, prompt, recon_name, weight_location_name)
+    attn_maps = _fit(model, image, prompt, weight_location_name)
     attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
     _visualise_ca_maps(model, attn_maps_avg, prompt, cross_attn_name)
+    # Need to move the model to cpu so that the downstream loading + editing
+    # tests have enough GPU memory available to reload the model.
+    # TODO: Write a method that sets the device of the SDAdapter
+    model.model.model.to("cpu")
 
 
 @pytest.mark.dependency(name="dpl_3")
@@ -55,17 +72,40 @@ def test_dpl_cross_attn_visualisation(
     fig_dir,
     weights_dir,
 ):
-    recon_name = os.path.join(fig_dir, "dpl_reconstruction.pdf")
-    cross_attn_name = os.path.join(fig_dir, "dpl_avg_cross_attention_maps.pdf")
+    cross_attn_name = os.path.join(fig_dir, "dpl_3_avg_cross_attention_maps.pdf")
     dpl_3_weights_dir = os.path.join(weights_dir, "dpl_3")
-    _test(dpl_3, image_prompt_cat_and_dog, recon_name, cross_attn_name, dpl_3_weights_dir)
+    _test(dpl_3, image_prompt_cat_and_dog, cross_attn_name, dpl_3_weights_dir)
 
 
-@pytest.mark.dependency(name="dpl_editing", depends=["dpl_3"])
-def test_dpl_editing(weights_dir):
+@pytest.mark.dependency(name="dpl_recon", depends=["dpl_3"])
+def test_dpl_reconstruction(fig_dir, weights_dir):
     dpl_3_weights_dir = os.path.join(weights_dir, "dpl_3")
-    model = DynamicPromptOptimisation.load(dpl_3_weights_dir)
-    assert False
+    model = DynamicPromptOptimisation.load(dpl_3_weights_dir, device_availability())
+    recon = model.generate()
+    recon.save(os.path.join(fig_dir, "dpl_3_reconstruction.pdf"))
+    # TODO: Add an MSE threshold
+
+
+@pytest.mark.dependency(name="dpl_replace", depends=["dpl_3"])
+def test_dpl_editing(fig_dir, weights_dir):
+    name = "dpl_3"
+    dpl_3_weights_dir = os.path.join(weights_dir, name)
+    model = DynamicPromptOptimisation.load(dpl_3_weights_dir, device_availability())
+    local = True
+    _edit(model, {"dog": "lion"}, {}, name, fig_dir, local)
+    _edit(model, {"cat": "wolf"}, {}, name, fig_dir, local)
+    _edit(model, {"dog": "lion", "cat": "zebra"}, {}, name, fig_dir, local)
+
+
+@pytest.mark.dependency(name="dpl_replace_more", depends=["dpl_3"])
+def test_dpl_editing_more(fig_dir, weights_dir):
+    name = "dpl_3"
+    dpl_3_weights_dir = os.path.join(weights_dir, name)
+    model = DynamicPromptOptimisation.load(dpl_3_weights_dir, device_availability())
+    local = True
+    _edit(model, {"dog": "lion"}, {}, name, fig_dir, local)
+    _edit(model, {"cat": "wolf"}, {}, name, fig_dir, local)
+    _edit(model, {"dog": "lion", "cat": "zebra"}, {}, name, fig_dir, local)
 
 
 @pytest.mark.dependency(name="nti")
@@ -76,17 +116,30 @@ def test_nti_cross_attn_visualisation(
     fig_dir,
     weights_dir,
 ):
-    recon_name = os.path.join(fig_dir, "nti_reconstruction.pdf")
     cross_attn_name = os.path.join(fig_dir, "nti_avg_cross_attention_maps.pdf")
     nti_weights_dir = os.path.join(weights_dir, "nti")
-    _test(nti, image_prompt_cat_and_dog, recon_name, cross_attn_name, nti_weights_dir)
+    _test(nti, image_prompt_cat_and_dog, cross_attn_name, nti_weights_dir)
 
 
-@pytest.mark.dependency(name="nti_editing", depends=["dpl_3"])
-def test_nti_editing(weights_dir):
-    nti_weights_dir = os.path.join(weights_dir, "nti")
-    model = DynamicPromptOptimisation.load(nti_weights_dir)
-    assert False
+@pytest.mark.dependency(name="nti_recon", depends=["nti"])
+def test_nti_reconstruction(fig_dir, weights_dir):
+    name = "nti"
+    nti_weights_dir = os.path.join(weights_dir, name)
+    model = DynamicPromptOptimisation.load(nti_weights_dir, device_availability())
+    recon = model.generate()
+    recon.save(os.path.join(fig_dir, "nti_reconstruction.pdf"))
+    # TODO: Add an MSE threshold
+
+
+@pytest.mark.dependency(name="nti_editing", depends=["nti"])
+def test_nti_editing(fig_dir, weights_dir):
+    name = "nti"
+    nti_weights_dir = os.path.join(weights_dir, name)
+    model = DynamicPromptOptimisation.load(nti_weights_dir, device_availability())
+    local = True
+    _edit(model, {"dog": "lion"}, {}, name, fig_dir, local)
+    _edit(model, {"cat": "wolf"}, {}, name, fig_dir, local)
+    _edit(model, {"dog": "lion", "cat": "zebra"}, {}, name, fig_dir, local)
 
 
 @pytest.mark.dependency(depends=["nti_editing", "dpl_editing"])
@@ -121,4 +174,20 @@ def test_dpl_losses_cross_attn_visualisation(
             title = token if i == 0 else None
             plot_image_on_axis(axes[i][j], norm_attn_map, title, fontsize=10)
     save_figure(fig, "dpl_losses_cross_attention_comparison.pdf")
+
+
+def _fit_nti_dpl(weights_dir, name):
+    pass
+
+
+@pytest.mark.dependency(depends=["dpl_3", "nti"])
+@pytest.mark.slow
+def fitting_sports_equipment():
+    assert False
+
+
+@pytest.mark.dependency(depends=["dpl_3", "nti"])
+@pytest.mark.slow
+def fitting_fruits():
+    assert False
 

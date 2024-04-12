@@ -47,3 +47,7 @@ def save_figure(fig: Figure, name: str):
         raise ValueError("Figure name must end with '.pdf'")
     fig.savefig(name, bbox_inches="tight")
 
+
+def device_availability() -> Literal["cuda", "cpu"]:
+    return "cuda" if torch.cuda.is_available() else "cpu"
+

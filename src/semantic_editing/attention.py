@@ -1,7 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from itertools import product
-from typing import List, Literal, Optional, Union, get_args
+from typing import Dict, List, Literal, Optional, Union, get_args
 
 import torch
 from diffusers import UNet2DConditionModel
@@ -54,7 +54,9 @@ class AttentionStore(ABC):
         query: torch.FloatTensor,
         key: torch.FloatTensor,
         value: torch.FloatTensor,
+        **kwargs,
     ):
+        # TODO: Log that nothing is being done with the kwargs here
         self._step_store(
             attn,
             is_cross,
@@ -126,7 +128,6 @@ class AttentionStore(ABC):
 
     def reset(self):
         self._cur_att_layer = 0
-        self._cur_step_index = 0
         self.step_store = self._get_empty_store()
         self.attention_store = self._get_empty_store()
 
@@ -211,14 +212,6 @@ class AttentionStoreAccumulate(AttentionStore):
 
 class AttentionStoreEdit(AttentionStore, ABC):
 
-    def __init__(self, ddim_steps: int, cross_replace_steps: int, self_replace_steps: int, indices_to_edit: List[int]):
-        super().__init__()
-        self.ddim_steps = ddim_steps
-        self.cross_replace_steps = cross_replace_steps
-        self.self_replace_steps = self_replace_steps
-        self.indices_to_edit = indices_to_edit
-        self._cur_step_index = 0
-
     @abstractmethod
     def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
         raise NotImplementedError
@@ -227,7 +220,37 @@ class AttentionStoreEdit(AttentionStore, ABC):
     def _self_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
         raise NotImplementedError
 
-    @abstractmethod
+    def _step_store(
+        self,
+        attn: torch.FloatTensor,
+        is_cross: bool,
+        place_in_unet: str,
+        hidden_states: torch.FloatTensor,
+        query: torch.FloatTensor,
+        key: torch.FloatTensor,
+        value: torch.FloatTensor,
+    ):
+        raise NotImplementedError
+
+    def _step_store(
+        self,
+        attn: torch.FloatTensor,
+        is_cross: bool,
+        place_in_unet: str,
+        hidden_states: torch.FloatTensor,
+        query: torch.FloatTensor,
+        key: torch.FloatTensor,
+        value: torch.FloatTensor,
+    ):
+        res = int(math.sqrt(attn.shape[1]))
+        # TODO: As a general class, this should store feature, query, key and value
+        # vectors also.
+        dict_key = self._attention_store_key_string(place_in_unet, is_cross, "attn", res)
+        if self.step_store[dict_key] is None:
+            self.step_store[dict_key] = [attn]
+        else:
+            self.step_store[dict_key].append(attn)
+
     def __call__(
         self,
         attn: torch.FloatTensor,
@@ -237,8 +260,9 @@ class AttentionStoreEdit(AttentionStore, ABC):
         query: torch.FloatTensor,
         key: torch.FloatTensor,
         value: torch.FloatTensor,
+        **kwargs,
     ) -> torch.FloatTensor:
-        super().__call__(
+        self._step_store(
             attn,
             is_cross,
             place_in_unet,
@@ -247,33 +271,44 @@ class AttentionStoreEdit(AttentionStore, ABC):
             key,
             value,
         )
-        return self._edit(attn, is_cross)
+
+        self._cur_att_layer += 1
+        if self._cur_att_layer == self._num_att_layers:
+            self._cur_att_layer = 0
+            self._between_steps()
+
+        return self._edit(
+            attn,
+            is_cross,
+            kwargs.get("cross_replace", False),
+            kwargs.get("self_replace", False),
+            kwargs.get("amplify_indices", {}),
+        )
+
+    def _between_steps(self):
+        self.attention_store = self.step_store
+        self.step_store = self._get_empty_store()
 
     def _edit(
         self,
         attn: torch.FloatTensor,
         is_cross: bool,
+        cross_replace: bool,
+        self_replace: bool,
+        amplify_scale: Dict[int, int],
     ) -> torch.FloatTensor:
-        if is_cross and self._cur_step_index < self.cross_replace_steps:
-            attn = self._cross_attention_edit_step(attn)
-        elif (not is_cross) and self._cur_step_index < self.self_replace_steps:
-            attn = self._self_attention_edit_step(attn)
-
-        if self._cur_step_index == self.ddim_steps:
-            self._cur_step_index = 0
-
-        return attn
-
-    def _accumulate(self, item: torch.FloatTensor, res: int) -> List[torch.FloatTensor]:
-        return [_unflatten_attn_map(_item, res) for _item in item]
-
-    def _between_steps(self):
-        self.attention_store = self.step_store
-        self.step_store = self._get_empty_store()
-        self._cur_step_index += 1
+        if is_cross and cross_replace:
+            return self._cross_attention_edit_step(attn, amplify_scale)
+        elif (not is_cross) and self_replace:
+            return self._self_attention_edit_step(attn)
+        else:
+            return attn
 
     def _get_average_attention(self):
         return self.attention_store
+
+    def _accumulate(self, item: torch.FloatTensor, res: int) -> List[torch.FloatTensor]:
+        return [_unflatten_attn_map(_item, res).unsqueeze(0) for _item in item]
 
     def aggregate_attention(
         self,
@@ -282,32 +317,50 @@ class AttentionStoreEdit(AttentionStore, ABC):
         is_cross: bool,
         element_name: ATTENTION_COMPONENT,
     ) -> torch.FloatTensor:
-        raise NotImplementedError
+        """Aggregates the attention across the different layers and heads at the specified resolution."""
+        out = []
+        attention_maps = self._get_average_attention()
+        for place_in_unet in places_in_unet:
+            dict_key = self._attention_store_key_string(place_in_unet, is_cross, element_name, res)
+            item = attention_maps[dict_key]
+            if item is None:
+                continue
+            out.extend(self._accumulate(item, res))
+
+        if len(out) > 0:
+            out = torch.cat(out, dim=0)
+            original_out, target_out = out.chunk(2, dim=1)
+            original_out = original_out.sum(0) / original_out.shape[0]
+            target_out = target_out.sum(0) / target_out.shape[0]
+        else:
+            raise ValueError("No attentions maps found matching the criteria")
+
+        return torch.cat([original_out, target_out])
 
 
-class AttentionStoreReplace(AttentionStoreEdit):
+class AttentionStoreRefine(AttentionStoreEdit):
+    # TODO: Do not assume that 2 vectors are being passed in to make the attn
+    # Pass in #vectors, and the dimensions that are being swapped,
+    # e.g. 4 vectros, and we swap dim 2 and 3. 
 
-    def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
-        raise NotImplementedError
+    def _cross_attention_edit_step(self, attn: torch.FloatTensor, amplify_indices: Dict[int, int]) -> torch.FloatTensor:
+        C, H, W = attn.shape
+        attn_chunked = attn.reshape(2, C // 2, H, W)
+        attn_original = attn_chunked[0].clone()
+        for i, scale in amplify_indices.items():
+            attn_original[:, :, i] *= scale
+        attn_chunked[1] = attn_original
+        return attn_chunked.reshape(C, H, W)
 
-    def _self_attention_edit_step(self, attn: torch.FloatTensor):
-        raise NotImplementedError
-
-
-class AttentionStoreReweight(AttentionStoreEdit):
-
-    def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
-        raise NotImplementedError
-        # C, H, W = attn.shape
-        # attn_ = attn_.reshape(4, C // 4, H, W)
-        # attn_replace = attn_[2].clone()
-        # for i in self.indices_to_edit:
-        #     attn_replace[:, :, i] *= 2
-        # attn_[3] = attn_replace
-        # return attn_.reshape(C, H, W)
-
-    def _self_attention_edit_step(self, attn: torch.FloatTensor):
-        raise NotImplementedError
+    def _self_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
+        # TODO: Pass 256 magic number in as hyperparameter
+        C, H, W = attn.shape
+        if H <= 256:
+            attn_chunked = attn.reshape(2, C // 2, H, W)
+            attn_chunked[1] = attn_chunked[0]
+            return attn_chunked.reshape(C, H, W)
+        else:
+            return attn
 
 
 class AttnProcessorWithAttentionStore:
@@ -323,6 +376,7 @@ class AttnProcessorWithAttentionStore:
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
+        **kwargs,
     ) -> torch.FloatTensor:
         batch_size, sequence_length, _ = hidden_states.shape
         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
@@ -351,6 +405,7 @@ class AttnProcessorWithAttentionStore:
             query,
             key,
             value,
+            **kwargs,
         )
         # TODO: This is only None at prediction time. So could refactor this better
         # so we're not always checking the conditons below.

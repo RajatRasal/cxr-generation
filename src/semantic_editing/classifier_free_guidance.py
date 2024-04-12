@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, Optional
 
 from PIL import Image
 
@@ -22,6 +22,8 @@ class CFGWithDDIM(CFGOptimisation):
         self.attention_accumulate = attention_accumulate
 
     def fit(self, image: Image.Image, prompt: str):
+        self.prompt = prompt
+
         if self.image_size is not None:
             image = image.resize((self.image_size, self.image_size))
 
@@ -33,20 +35,31 @@ class CFGWithDDIM(CFGOptimisation):
 
         self.latent_T = ddim_inversion(self.model, image, prompt)[-1]
 
-    def generate(self, prompt: str) -> Image.Image:
-        if not hasattr(self, "latent_T"):
+    def generate(
+        self,
+        swaps: Optional[Dict[str, str]] = None,
+        weights: Optional[Dict[str, str]] = None,
+    ) -> Image.Image:
+        if not (hasattr(self, "latent_T") and hasattr(self, "prompt")):
             assert ValueError(f"Need to fit {self.__class__.__name__} on an image before generating")
 
-        if self.attention_accumulate:
-            self.model.register_attention_store(
-                AttentionStoreAccumulate(),
-                AttnProcessorWithAttentionStore,
-            )
+        if weights is not None:
+            raise NotImplementedError
+        elif swaps is not None:
+            raise NotImplementedError
+        else:
+            edit_prompt = self.prompt
+
+        # if self.attention_accumulate:
+        #     self.model.register_attention_store(
+        #         AttentionStoreAccumulate(),
+        #         AttnProcessorWithAttentionStore,
+        #     )
 
         latents = classifier_free_guidance(
             self.model,
             self.latent_T.clone(),
-            prompt,
+            edit_prompt,
             self.guidance_scale,
         )
         latent_0 = latents[-1]

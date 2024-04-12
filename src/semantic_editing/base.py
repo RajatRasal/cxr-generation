@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod, abstractclassmethod
-from typing import List
+from typing import Dict, Optional, List
 
 import torch
 from PIL import Image
@@ -27,7 +27,7 @@ class CFGOptimisation(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def generate(self, prompt: str) -> Image.Image:
+    def generate(self, swaps: Optional[Dict[str, str]] = None, weights: Optional[Dict[str, str]] = None) -> Image.Image:
         raise NotImplementedError
 
     @abstractmethod

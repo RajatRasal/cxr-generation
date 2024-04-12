@@ -12,7 +12,7 @@ from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreT
 from semantic_editing.classifier_free_guidance import CFGWithDDIM
 from semantic_editing.diffusion import StableDiffusionAdapter
 from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
-from semantic_editing.utils import seed_everything
+from semantic_editing.utils import seed_everything, device_availability
 
 
 SEED = 0
@@ -57,6 +57,11 @@ def weights_dir():
 
 
 @pytest.fixture
+def images_dir():
+    return "test/semantic_editing/images"
+
+
+@pytest.fixture
 def seed():
     return SEED
 
@@ -87,22 +92,20 @@ def jet_cmap():
 
 @pytest.fixture
 def generator(seed):
-    # TODO: Set cuda as a variable
-    generator = torch.Generator("cuda")
+    generator = torch.Generator(device_availability())
     generator.manual_seed(seed)
     return generator
 
 
 def sd_model():
-    # TODO: Set cuda as a variable
     model = StableDiffusionPipeline.from_pretrained(
         STABLE_DIFFUSION_VERSION,
 	    torch_dtype=torch.float32,
 	    safety_checker=None,
-	).to("cuda")
-    model.text_encoder.text_model.encoder.requires_grad_(False)
-    model.text_encoder.text_model.final_layer_norm.requires_grad_(False)
-    model.text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
+	).to(device_availability())
+    # model.text_encoder.text_model.encoder.requires_grad_(False)
+    # model.text_encoder.text_model.final_layer_norm.requires_grad_(False)
+    # model.text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
     return model
 
 
@@ -117,19 +120,18 @@ def sd_adapter_fixture():
 
 
 @pytest.fixture
-def image_prompt():
-    # TODO: remove absolute path to cat mirror and change to relative path
-    return Image.open("/vol/biomedic3/rrr2417/cxr-generation/test/semantic_editing/cat_mirror.jpeg"), "A cat sitting next to a mirror"
+def image_prompt(images_dir):
+    return Image.open(os.path.join(images_dir, "cat_mirror.jpeg")), "A cat sitting next to a mirror"
 
 
 @pytest.fixture
-def image_prompt_cat_and_dog():
-    return Image.open("/vol/biomedic3/rrr2417/cxr-generation/test/semantic_editing/catdog.jpg"), "a cat and a dog"
+def image_prompt_cat_and_dog(images_dir):
+    return Image.open(os.path.join(images_dir, "catdog.jpg")), "a cat and a dog"
 
 
 @pytest.fixture
-def image_prompt_girl_and_boy_trampoline():
-    return Image.open("/vol/biomedic3/rrr2417/cxr-generation/test/semantic_editing/catdog.jpg"), "a cat and a dog"
+def image_prompt_pear_and_apple(images_dir):
+    return Image.open(os.path.join(images_dir, "pear_and_apple.jpg")), "a pear and an apple"
 
 
 @pytest.fixture

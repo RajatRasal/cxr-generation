@@ -36,6 +36,8 @@ def test_get_noise_pred(sd_adapter_fixture, image_prompt, fig_dir):
 
 
 def test_ddim_inversion(sd_adapter_fixture, image_prompt, fig_dir):
+    # TODO: This is not working as expected! We are not seeing the varying
+    # steps in the denoising process
     idxs = [
         0,
         int(sd_adapter_fixture.ddim_steps / 5),

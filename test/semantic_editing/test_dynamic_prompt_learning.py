@@ -53,7 +53,7 @@ def _visualise_ca_maps(gen, cross_attn_avg: torch.FloatTensor, prompt: str, file
     save_figure(fig, file_name)
 
 
-def _test(model, image_and_prompt, cross_attn_name, weight_location_name):
+def _test(model, image_and_prompt, cross_attn_name, weight_location_name, to_cpu=True):
     image, prompt = image_and_prompt
     attn_maps = _fit(model, image, prompt, weight_location_name)
     attn_maps_avg = torch.cat([attn_map.unsqueeze(0) for attn_map in attn_maps], dim=0).mean(0)
@@ -61,7 +61,8 @@ def _test(model, image_and_prompt, cross_attn_name, weight_location_name):
     # Need to move the model to cpu so that the downstream loading + editing
     # tests have enough GPU memory available to reload the model.
     # TODO: Write a method that sets the device of the SDAdapter
-    model.model.model.to("cpu")
+    if to_cpu:
+        model.model.model.to("cpu")
 
 
 @pytest.mark.dependency(name="dpl_3")
@@ -176,18 +177,57 @@ def test_dpl_losses_cross_attn_visualisation(
     save_figure(fig, "dpl_losses_cross_attention_comparison.pdf")
 
 
-def _fit_nti_dpl(weights_dir, name):
-    pass
+def _editing_dirs(editing_dir, model_name, exp_name, makedirs=False):
+    store_dir = os.path.join(editing_dir, exp_name)
+    model_dir = os.path.join(store_dir, model_name)
+    weights_dir = os.path.join(model_dir, "weights")
+    images_dir = os.path.join(model_dir, "images")
+    if makedirs:
+        os.makedirs(store_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(weights_dir, exist_ok=True)
+        os.makedirs(images_dir, exist_ok=True)
+    return store_dir, model_dir, weights_dir, images_dir
 
 
-@pytest.mark.dependency(depends=["dpl_3", "nti"])
+@pytest.mark.parametrize(
+    "name", 
+    [
+        ("pear_and_apple"),
+        ("sports_equipment"),
+        ("horse_and_sheep"),
+        ("book_clock_bottle"),
+        ("football_on_bench"),
+        ("cake_on_plate"),
+    ]
+)
+@pytest.mark.dependency()
 @pytest.mark.slow
-def fitting_sports_equipment():
-    assert False
+def test_fitting_more_models(name, request, more_editing_dir, dpl_3, nti):
+    weights_dir = os.path.join(more_editing_dir, "weights")
+    image_and_prompt = request.getfixturevalue(f"image_prompt_{name}")
+    for model_name, model in [("nti", nti), ("dpl", dpl_3)]:
+        store_dir, model_dir, weights_dir, images_dir = _editing_dirs(more_editing_dir, model_name, name, True)
+        cross_attn_name = os.path.join(images_dir, "cross_attention_maps.pdf")
+        _test(model, image_and_prompt, cross_attn_name, weights_dir, False)
 
 
-@pytest.mark.dependency(depends=["dpl_3", "nti"])
+@pytest.mark.parametrize(
+    "name, swaps_list", 
+    [
+        ("pear_and_apple", [{"pear": "watermelon"}, {"apple": "pineapple"}]),
+        ("sports_equipment", [{"football": "balloon"}]),
+        ("horse_and_sheep", [{"horse": "donkey"}]),
+        ("book_clock_bottle", [{"book": "wheel"}]),
+    ]
+)
+@pytest.mark.dependency(depends=["test_fitting_more_models"])
 @pytest.mark.slow
-def fitting_fruits():
-    assert False
+def test_editing_with_more_models(name, swaps_list, request, more_editing_dir, dpl_3, nti):
+    local = True
+    for model_name, model in [("nti", nti), ("dpl", dpl_3)]:
+        for swaps in swaps_list:
+            store_dir, model_dir, weights_dir, images_dir = _editing_dirs(more_editing_dir, model_name, name)
+            model = DynamicPromptOptimisation.load(weights_dir, device_availability())
+            _edit(model, swaps, {}, "", images_dir, local)
 

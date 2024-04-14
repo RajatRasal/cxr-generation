@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as F_vision
 from PIL import Image
 from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeline
+from diffusers.utils import PIL_INTERPOLATION
 from torch.optim import Adam
 from tqdm import tqdm
 
@@ -18,7 +19,7 @@ from semantic_editing.base import CFGOptimisation, NULL_STRING
 from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
 from semantic_editing.utils import seed_everything, init_stable_diffusion, plot_image_on_axis
-from semantic_editing.tools import CLUSTERING_ALGORITHM, background_mask, find_noun_indices
+from semantic_editing.tools import CLUSTERING_ALGORITHM, background_mask, center_crop, find_noun_indices
 
 
 class DynamicPromptOptimisation(CFGOptimisation):
@@ -47,6 +48,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
         clustering_algorithm: CLUSTERING_ALGORITHM = "kmeans",
         max_clusters: int = 5,
         clustering_random_state: int = 0,
+        center_crop: bool = True,
     ):
         self.model = model
 
@@ -73,6 +75,8 @@ class DynamicPromptOptimisation(CFGOptimisation):
         self.clustering_algorithm = clustering_algorithm
         self.max_clusters = max_clusters
         self.clustering_random_state = clustering_random_state
+
+        self.center_crop = center_crop
 
     def _loss_attention_balancing(
         self,
@@ -150,6 +154,13 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
     def fit(self, image: Image.Image, prompt: str) -> List[torch.FloatTensor]:
         self.prompt = prompt
+
+        # Transform image to a square
+        if self.center_crop and image.size[0] != image.size[1]:
+            image = center_crop(image)
+        else:
+            # TODO: Log that cropping was not applied
+            pass
 
         image = image.resize((self.image_size, self.image_size))
 
@@ -378,6 +389,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             "clustering_algorithm": self.clustering_algorithm,
             "max_clusters": self.max_clusters,
             "clustering_random_state": self.clustering_random_state,
+            "center_crop": self.center_crop,
         }
         with open(os.path.join(dirname, "hyperparameters.pickle"), "wb") as f:
             pickle.dump(hyperparameters, f, protocol=pickle.HIGHEST_PROTOCOL)

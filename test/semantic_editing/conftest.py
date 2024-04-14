@@ -57,6 +57,13 @@ def weights_dir():
 
 
 @pytest.fixture
+def more_editing_dir():
+    dirname = "test/semantic_editing/more_editing_dir" 
+    os.makedirs(dirname, exist_ok=True)
+    return dirname
+
+
+@pytest.fixture
 def images_dir():
     return "test/semantic_editing/images"
 
@@ -132,6 +139,51 @@ def image_prompt_cat_and_dog(images_dir):
 @pytest.fixture
 def image_prompt_pear_and_apple(images_dir):
     return Image.open(os.path.join(images_dir, "pear_and_apple.jpg")), "a pear and an apple"
+
+
+@pytest.fixture
+def image_prompt_sports_equipment(images_dir):
+    return Image.open(os.path.join(images_dir, "sports_equipment.jpg")), "a basketball, a football, and a tennis ball on a racket"
+
+
+@pytest.fixture
+def image_prompt_horse_and_sheep(images_dir):
+    return Image.open(os.path.join(images_dir, "horse_and_sheep.jpg")), "a horse and a sheep"
+
+
+@pytest.fixture
+def image_prompt_book_clock_bottle(images_dir):
+    return Image.open(os.path.join(images_dir, "book_clock_bottle.jpg")), "a clock on a pile of books next to a bottle"
+
+
+@pytest.fixture
+def image_prompt_football_on_bench(images_dir):
+    return Image.open(os.path.join(images_dir, "football_on_bench.jpeg")), "a football on a bench in the park"
+
+
+@pytest.fixture
+def image_prompt_cake_on_plate(images_dir):
+    return Image.open(os.path.join(images_dir, "brownie_cake_on_plate.jpg")), "a slice of chocolate cake on a plate"
+
+
+@pytest.fixture
+def image_prompt_cat_bird_stitching(images_dir):
+    return Image.open(os.path.join(images_dir, "cat_bird_stitching.jpg")), "a cat and a bird on a cross stitching pattern"
+
+
+@pytest.fixture
+def image_prompt_cat_bird_painting(images_dir):
+    return Image.open(os.path.join(images_dir, "cat_bird_painting.jpg")), "a painting of a cat and a bird on a green background"
+
+
+@pytest.fixture
+def image_prompt_cat_dog_watercolour(images_dir):
+    return Image.open(os.path.join(images_dir, "cat_dog_watercolour.jpg")), "a dog and a cat are shown in this watercolour"
+
+
+@pytest.fixture
+def image_prompt_cat_dog_flowers(images_dir):
+    return Image.open(os.path.join(images_dir, "cat_dog_flowers.png")), "a cat and a dog sitting in flowers"
 
 
 @pytest.fixture

@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as F_vision
+from PIL import Image
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
@@ -262,4 +263,10 @@ def background_mask(
     bg_map = F_vision.resize(bg_map, attention_resolution)
     bg_map = F_vision.pil_to_tensor(bg_map).bool().float().to(device)
     return bg_map
+
+
+def center_crop(img: Image.Image) -> Image.Image:
+    dim = min(img.size)
+    img = F_vision.center_crop(img, output_size=[dim, dim])
+    return img 
 

@@ -1,19 +1,29 @@
 """
 https://lightning.ai/lightning-ai/studios/download-stream-400m-images-text
 """
-import os, math, io, concurrent, time, PIL
+import argparse
+import concurrent
+import math
+import os
+import time
+from PIL import Image
+from io import BytesIO
 from litdata import optimize
 from litdata.processing.readers import ParquetReader
 from litdata.processing.utilities import make_request, get_worker_rank, catch
 
 
 def download_image_and_prepare(row):
+    # Unpack row
     image_id, url, text, _, _, image_license, nsfw, similarity = row
+    # Download image
     data = make_request(url, timeout=1.5)
-    buff = io.BytesIO()
-    PIL.Image.open(data).convert('RGB').save(buff, quality=80, format='JPEG')
+    # Store image bytes in Image object
+    buff = BytesIO()
+    Image.open(data).convert('RGB').save(buff, quality=80, format='JPEG')
     buff.seek(0)
     img = buff.read()
+    # Fix types
     return [int(image_id), img, str(text), str(image_license), str(nsfw), float(similarity)]
 
 
@@ -77,19 +87,21 @@ class ImageFetcher:
 
 
 def main():
-    input_dir = "/data/laion_400m/parquet"
-    output_dir = "/data/laion_400m/chunks"
-    parquet_files = sorted([os.path.join(input_dir, f) for f in os.listdir(input_dir)])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_dir", type=str, default="/data/laion_400m/parquet")
+    parser.add_argument("--output_dir", type=str, default="/data/laion_400m/chunks")
+    args = parser.parse_args()
+
+    parquet_files = sorted([os.path.join(args.input_dir, f) for f in os.listdir(args.input_dir)])
 
     # Use optimize to apply the Image Fetcher over the parquet files.
     optimize(
         fn=ImageFetcher(max_threads=16),
         inputs=parquet_files[:3],
-        output_dir=output_dir,
+        output_dir=args.output_dir,
         num_workers=os.cpu_count(),
-        reader=ParquetReader("cache", num_rows=32768, to_pandas=False), # Splits the parquet files into smaller ones to ease parallelization
+        # Splits the parquet files into smaller ones to ease parallelization
+        reader=ParquetReader("cache", num_rows=32768, to_pandas=False),
         chunk_bytes="64MB",
         num_downloaders=0,
-        # num_nodes=32,
-        # machine=Machine.DATA_PREP,
     )

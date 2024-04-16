@@ -6,8 +6,9 @@ import concurrent
 import math
 import os
 import time
-from PIL import Image
 from io import BytesIO
+
+from PIL import Image
 from litdata import optimize
 from litdata.processing.readers import ParquetReader
 from litdata.processing.utilities import make_request, get_worker_rank, catch
@@ -16,13 +17,20 @@ from litdata.processing.utilities import make_request, get_worker_rank, catch
 def download_image_and_prepare(row):
     # Unpack row
     image_id, url, text, _, _, image_license, nsfw, similarity = row
+
     # Download image
     data = make_request(url, timeout=1.5)
+
     # Store image bytes in Image object
     buff = BytesIO()
-    Image.open(data).convert('RGB').save(buff, quality=80, format='JPEG')
+    img = Image.open(data)
+    if img.format == "PNG" and img.mode != "RGBA":
+        img.convert("RGBA").save(buff, quality=80, format="PNG")
+    else:
+        img.convert("RGB").save(buff, quality=80, format="JPEG")
     buff.seek(0)
     img = buff.read()
+
     # Fix types
     return [int(image_id), img, str(text), str(image_license), str(nsfw), float(similarity)]
 
@@ -34,10 +42,9 @@ def is_valid(row):
         return False
 
 
-# Define the class to fetch the image and serialize it back into Lightning Streaming format
 class ImageFetcher:
 
-    def __init__(self, max_threads=os.cpu_count()):
+    def __init__(self, batch_size: int = 128, max_threads: int = os.cpu_count()):
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_threads)
         # Used to track metrics
         self.stored = self.skipped = self.last_stored = 0
@@ -65,8 +72,10 @@ class ImageFetcher:
             self.last_time = time.time()
             self.last_stored = self.stored
 
-    # THIS IS THE METHOD CALLED BY THE OPTIMIZE OPERATOR
     def __call__(self, df):
+        """
+        This is the method called by the optimize operator.
+        """
         for rows in df.iter_batches(batch_size=2048):
             rows = [row for row in rows.to_pandas().values.tolist() if is_valid(row) is True]
             futures = [self.thread_pool.submit(catch(download_image_and_prepare), row) for row in rows] 
@@ -88,20 +97,32 @@ class ImageFetcher:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_dir", type=str, default="/data/laion_400m/parquet")
-    parser.add_argument("--output_dir", type=str, default="/data/laion_400m/chunks")
+    parser.add_argument("--input_dir", type=str, default="/data2/laion_400m/parquet")
+    parser.add_argument("--parquet_part", type=int, default=0)
+    parser.add_argument("--output_dir", type=str, default="/data2/laion_400m/chunks")
+    parser.add_argument("--batch_size", type=int, default=2048)
+    parser.add_argument("--max_threads", type=int, default=os.cpu_count())
+    parser.add_argument("--num_workers", type=int, default=os.cpu_count())
+    parser.add_argument("--chunk_mb", type=int, default=64)
     args = parser.parse_args()
 
-    parquet_files = sorted([os.path.join(args.input_dir, f) for f in os.listdir(args.input_dir)])
+    parquet_files = sorted([
+        (int(f[5:10]), os.path.join(args.input_dir, f))
+        for f in os.listdir(args.input_dir)
+    ])
+    part, parquet_file = parquet_files[args.parquet_part]
+
+    output_dir = os.path.join(args.output_dir, str(part)) 
+    os.makedirs(output_dir)
 
     # Use optimize to apply the Image Fetcher over the parquet files.
     optimize(
-        fn=ImageFetcher(max_threads=16),
-        inputs=parquet_files[:3],
-        output_dir=args.output_dir,
-        num_workers=os.cpu_count(),
+        fn=ImageFetcher(batch_size=args.batch_size, max_threads=args.max_threads),
+        inputs=[parquet_file],
+        output_dir=output_dir,
+        num_workers=args.num_workers,
         # Splits the parquet files into smaller ones to ease parallelization
         reader=ParquetReader("cache", num_rows=32768, to_pandas=False),
-        chunk_bytes="64MB",
+        chunk_bytes=f"{args.chunk_mb}MB",
         num_downloaders=0,
     )

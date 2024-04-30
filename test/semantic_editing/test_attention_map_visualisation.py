@@ -7,19 +7,33 @@ import torch.nn.functional as F
 from PIL import Image
 
 from semantic_editing.attention import AttentionStoreAccumulate, AttnProcessorWithAttentionStore
-from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_masks, find_noun_indices, localise_nouns, background_mask
+from semantic_editing.diffusion import ddim_inversion
+from semantic_editing.tools import attention_map_pca, attention_map_cluster, find_masks, find_tokens_and_noun_indices, localise_nouns, background_mask
 from semantic_editing.utils import plot_image_on_axis, save_figure
+from semantic_editing.tools import center_crop
 
 
 def test_visualise_attention_maps_pca(
-    cfg_ddim,
+    sd_adapter_fixture,
     image_prompt_cat_and_dog,
     jet_cmap,
 	fig_dir,
+    seed,
+    image_size,
 ):
-    image, prompt = image_prompt_cat_and_dog
-    cfg_ddim.fit(image, prompt)
-    attention_store_accumulate = cfg_ddim.model.get_attention_store()
+    # Setup
+    image, prompt, _, _ = image_prompt_cat_and_dog
+    sd_adapter_fixture.register_attention_store(
+        AttentionStoreAccumulate(),
+        AttnProcessorWithAttentionStore,
+    )
+    attention_store_accumulate = sd_adapter_fixture.get_attention_store()
+    ddim_inversion(
+        sd_adapter_fixture,
+        image.convert("RGB").resize((image_size, image_size)),
+        prompt,
+        torch.manual_seed(seed),
+    )
 
     fig1, axes1 = plt.subplots(nrows=3, ncols=4)
     fig2, axes2 = plt.subplots(nrows=3, ncols=4)
@@ -62,17 +76,27 @@ def test_visualise_attention_maps_pca(
 
 
 def test_visualise_cross_attention_maps_nouns_clustering(
-    cfg_ddim,
+    sd_adapter_fixture,
     image_prompt_pear_and_apple,
     jet_cmap,
     seed,
 	fig_dir,
     background_map_hps,
+    image_size,
 ):
-    # TODO: Make this test display figure 4 from the paper - include failure case
-    image, prompt = image_prompt_pear_and_apple
-    cfg_ddim.fit(image, prompt)
-    attention_store_accumulate = cfg_ddim.model.get_attention_store()
+    # Setup
+    image, prompt, tokens, index_noun_pairs = image_prompt_pear_and_apple
+    sd_adapter_fixture.register_attention_store(
+        AttentionStoreAccumulate(),
+        AttnProcessorWithAttentionStore,
+    )
+    attention_store_accumulate = sd_adapter_fixture.get_attention_store()
+    ddim_inversion(
+        sd_adapter_fixture,
+        image.convert("RGB").resize((image_size, image_size)),
+        prompt,
+        torch.manual_seed(seed),
+    )
 
     # Self-Attention
     self_attn_avg = attention_store_accumulate.aggregate_attention(
@@ -86,7 +110,7 @@ def test_visualise_cross_attention_maps_nouns_clustering(
         self_attn_avg,
         algorithm=background_map_hps["algorithm"],
         n_clusters=background_map_hps["n_clusters"],
-        random_state=seed,
+        **background_map_hps["kwargs"],
     )
 
     # Cross-Attention
@@ -98,12 +122,13 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     )
 
     # Object masks
-    noun_indices = find_noun_indices(cfg_ddim.model, prompt)
     masks = find_masks(
         attention_store_accumulate,
-        noun_indices,
-        random_state=seed,
-        **background_map_hps,
+        index_noun_pairs,
+        background_map_hps["background_threshold"],
+        background_map_hps["algorithm"],
+        background_map_hps["n_clusters"],
+        **background_map_hps["kwargs"],
     )
     masks = {
         k: Image.fromarray((v.cpu().numpy() * 255).astype(np.uint8))
@@ -113,12 +138,12 @@ def test_visualise_cross_attention_maps_nouns_clustering(
     # (original, self-attn, self-attn cluster, cross-attn cat, cross-attn dog, background, foreground cat, foreground dog)
     fig, axes = plt.subplots(nrows=1, ncols=8, figsize=(15, 5))
 
-    plot_image_on_axis(axes[0], image, "Original")
+    plot_image_on_axis(axes[0], center_crop(image), "Original")
     plot_image_on_axis(axes[1], self_attn_avg_proj, "Self-Attn")
     plot_image_on_axis(axes[2], self_attn_avg_clusters, "Self-Attn Clusters")
 
     noun_base_index = 3
-    for i, (noun_index, noun) in enumerate(noun_indices):
+    for i, (noun_index, noun) in enumerate(index_noun_pairs):
         plot_image_on_axis(axes[noun_base_index + i], cross_attn_avg[:, :, noun_index].cpu().numpy(), f"Cross-Attn: {noun.capitalize()}")
 
     # TODO: display these images in black and white

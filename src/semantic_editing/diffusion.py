@@ -11,29 +11,45 @@ from PIL import Image
 from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeline
 from torch.optim import Adam
 from tqdm import tqdm
+from transformers import CLIPTextModel, CLIPTokenizer
 
 from semantic_editing.attention import AttentionStore, AttnProcessorWithAttentionStore, prepare_unet
+from semantic_editing.utils import init_stable_diffusion
 
 
 class StableDiffusionAdapter:
+    """
+    This wrapper assumes that Stable Diffusion is not being changed in any way by any
+    editing algorithms.
+    """
 
-    def __init__(self, model: StableDiffusionPipeline, ddim_steps: int = 50, prepare_unet_for_editing: bool = True):
-        self.model = model
-        self.text_encoder = self.model.text_encoder
+    def __init__(self, model_name: str, ddim_steps: int = 50, device: Literal["cpu", "cuda"] = "cpu"):
+        self.model_name = model_name
         self.ddim_steps = ddim_steps
+        self.device = device
+        self.model = StableDiffusionPipeline.from_pretrained(self.model_name).to(self.device)
+        self.tokenizer = self.model.tokenizer
         self.scheduler = DDIMScheduler.from_config(self.model.scheduler.config)
         self.scheduler.set_timesteps(self.ddim_steps)
         self.inverse_scheduler = DDIMInverseScheduler.from_config(self.model.scheduler.config)
         self.inverse_scheduler.set_timesteps(self.ddim_steps)
-        self.tokenizer = self.model.tokenizer
-        self.vae = self.model.vae
-        self.unet = self.model.unet
-        self.prepare_unet_for_editing = prepare_unet_for_editing
-        if self.prepare_unet_for_editing:
-            self.unet = prepare_unet(self.unet)
-        self.device = self.model.device
-        self._original_embeddings = self.get_embeddings().weight.data.clone()
         self.attention_store = None
+
+    @property
+    def vae(self):
+        return self.model.vae
+
+    @property
+    def unet(self):
+        return self.model.unet
+    
+    @property
+    def text_encoder(self) -> CLIPTextModel:
+        return self.model.text_encoder
+
+    def reset(self):
+        self.model = StableDiffusionPipeline.from_pretrained(self.model_name).to(self.device)
+        self.tokenizer = self.model.tokenizer
 
     @torch.no_grad()
     def tokenise_text(self, prompt: str, string: bool = False) -> Union[torch.IntTensor, List[str]]:
@@ -45,6 +61,32 @@ class StableDiffusionAdapter:
             return_tensors="pt",
         ).input_ids
         return self.tokenizer.convert_ids_to_tokens(input_ids[0].tolist()) if string else input_ids
+
+    @torch.no_grad()
+    def add_tokens(self, tokens: List[str], init_words: List[Optional[str]]) -> List[int]:
+        # Validation
+        if init_words is not None and len(init_words) != len(tokens):
+            raise ValueError(f"There must be an init_word for every token `{tokens}`")
+        for token in tokens:
+            if self.convert_tokens_to_ids([token]) != self.convert_tokens_to_ids([self.tokenizer.eos_token]):
+                raise ValueError(f"The token `{token}` already exists")
+
+        # Add token to the tokenizer.
+        self.tokenizer.add_tokens(tokens)
+        # Get the id of the token just added.
+        new_token_ids = self.convert_tokens_to_ids(tokens)
+        # Resize the word embeddings matrix to include an embedding for the new token.
+        self.text_encoder.resize_token_embeddings(len(self.tokenizer))
+        # Set the new embedding equal to an existing embedding.
+        if init_words is not None:
+            init_word_ids = self.convert_tokens_to_ids(init_words)
+            embeddings = self.get_text_embeddings(init_word_ids)
+            self.set_text_embeddings(embeddings, new_token_ids)
+        return new_token_ids
+
+    @torch.no_grad()
+    def convert_tokens_to_ids(self, tokens: List[str]) -> List[int]:
+        return self.tokenizer.convert_tokens_to_ids(tokens)
 
     @torch.no_grad()
     def encode_text(self, prompt: str) -> torch.Tensor:
@@ -59,18 +101,24 @@ class StableDiffusionAdapter:
         text_embeddings = self.text_encoder(input_ids)[0]
         return text_embeddings
 
+    def encode_token_ids_with_grad(self, token_ids: List[int]) -> torch.Tensor:
+        input_ids = torch.tensor(token_ids).int().unsqueeze(0).to(self.device)
+        text_embeddings = self.text_encoder(input_ids)[0]
+        return text_embeddings
+
     @torch.no_grad()
-    def encode_image(self, image: Image.Image) -> torch.Tensor:
-        image = np.array(image)
-        image = torch.from_numpy(image).float() / 127.5 - 1
-        image = image.permute(2, 0, 1).unsqueeze(0).to(self.device)
-        latent = self.vae.encode(image).latent_dist.mean
-        latent = latent * 0.18215
+    def encode_image(self, image: Image.Image, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+        image = np.array(image).astype(np.float32) / 255.0
+        image = torch.from_numpy(image)
+        image = image.unsqueeze(0).permute(0, 3, 1, 2).to(self.device)
+        image = 2.0 * image - 1.0
+        latent = self.vae.encode(image).latent_dist.sample(generator)
+        latent = latent * self.vae.config.scaling_factor
         return latent
 
     @torch.no_grad()
     def decode_latent(self, latent: torch.Tensor) -> Image.Image:
-        latent = 1 / 0.18215 * latent.detach()
+        latent = 1 / self.vae.config.scaling_factor * latent
         image = self.vae.decode(latent).sample
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
@@ -91,8 +139,9 @@ class StableDiffusionAdapter:
         noise_pred: torch.FloatTensor,
         timestep: int,
         latent: torch.FloatTensor,
+        generator: Optional[torch.Generator] = None
     ) -> torch.FloatTensor:
-        return self.scheduler.step(noise_pred, timestep, latent).prev_sample
+        return self.scheduler.step(noise_pred, timestep, latent, generator=generator).prev_sample
 
     def get_noise_pred(
         self,
@@ -117,23 +166,18 @@ class StableDiffusionAdapter:
         return timesteps.flip(dims=(0,)) if inversion else timesteps
 
     def get_embeddings(self) -> torch.nn.modules.sparse.Embedding:
-        return self.model.text_encoder.get_input_embeddings()
+        return self.text_encoder.get_input_embeddings()
 
     def get_text_embeddings(self, indices: List[int]) -> torch.nn.parameter.Parameter:
-        return self.model.text_encoder.get_input_embeddings().weight[indices]
+        return self.get_embeddings().weight[indices]
 
     def set_text_embeddings(self, text_embeddings: torch.nn.parameter.Parameter, indices: List[int]):
         assert text_embeddings.shape[0] == len(indices)
-        self.model.text_encoder.get_input_embeddings().weight[indices] = text_embeddings
+        self.get_embeddings().weight[indices] = text_embeddings
 
     @torch.no_grad()
-    def reset_embeddings(self, indices_to_keep: Optional[List[int]] = None):
-        if indices_to_keep is None:
-            self.get_embeddings().weight[:, :] = self._original_embeddings
-        else:
-            mask = torch.ones(len(self.model.tokenizer), dtype=bool)
-            mask[indices_to_keep] = False
-            self.get_embeddings().weight[mask] = self._original_embeddings[mask]
+    def set_embeddings(self, embedding: torch.FloatTensor):
+        self.get_embeddings().weight[:, :] = embedding[:, :]
 
     def register_attention_store(
         self,
@@ -165,20 +209,31 @@ class StableDiffusionAdapter:
 
     def save(self, dirname: str):
         os.makedirs(dirname, exist_ok=True)
-        self.model.save_pretrained(os.path.join(dirname, "model"))
+        model_path = os.path.join(dirname, "model")
+        self.model.save_pretrained(model_path)
+        tokenizer_path = os.path.join(dirname, "tokenizer")
+        self.tokenizer.save_pretrained(tokenizer_path)
         kwargs = {
+            "model_path": model_path,
+            "tokenizer_path": tokenizer_path,
+            "model_name": self.model_name,
             "ddim_steps": self.ddim_steps,
-            "prepare_unet_for_editing": self.prepare_unet_for_editing,
         }
         with open(os.path.join(dirname, "kwargs"), "wb") as f:
             pickle.dump(kwargs, f)
 
     @classmethod
     def load(cls, dirname: str, device: Literal["cuda", "cpu"]) -> "StableDiffusionAdapter":
-        model = StableDiffusionPipeline.from_pretrained(os.path.join(dirname, "model")).to(device)
         with open(os.path.join(dirname, "kwargs"), "rb") as f:
             kwargs = pickle.load(f)
-        return cls(model, **kwargs)
+        tokenizer = CLIPTokenizer.from_pretrained(kwargs["tokenizer_path"])
+        sd = StableDiffusionPipeline.from_pretrained(kwargs["model_path"]).to(device)
+        del kwargs["tokenizer_path"]
+        del kwargs["model_path"]
+        model = cls(**kwargs, device=device)
+        model.model = sd
+        model.tokenizer = tokenizer
+        return model
 
 
 @torch.no_grad()
@@ -189,6 +244,7 @@ def classifier_free_guidance_step(
      null_embedding: torch.FloatTensor,
      timestep: int,
      guidance_scale: float = 7.5,
+     generator: Optional[torch.Generator] = None,
      local: bool = False,
      mask_attn_res: int = 16,
      mask_pool_k: int = 1,
@@ -220,7 +276,7 @@ def classifier_free_guidance_step(
         **cross_attention_kwargs_uncond,
     )
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-    latent = model.prev_step(noise_pred, timestep, latent)
+    latent = model.prev_step(noise_pred, timestep, latent, generator)
     if local:
         # (8 * 2, mask_attn_res, mask_attn_res, len(mask_indices))
         attn_maps = attn_maps[:, :, :, mask_indices]
@@ -271,9 +327,28 @@ def ddim_inversion(
     model: StableDiffusionAdapter,
     image: Image.Image,
     prompt: str,
+    generator: Optional[torch.Generator] = None,
 ) -> List[torch.FloatTensor]:
-    latent = model.encode_image(image)
+    latent = model.encode_image(image, generator=generator)
     prompt_embedding = model.encode_text(prompt)
+    latents = [latent]
+    # From timestep 0 to T
+    for timestep in model.get_timesteps(inversion=True):
+        noise_pred = model.get_noise_pred(latent, timestep, prompt_embedding)
+        latent = model.next_step(noise_pred, timestep, latent)
+        latents.append(latent)
+    return latents
+
+
+@torch.no_grad()
+def ddim_inversion_with_token_ids(
+    model: StableDiffusionAdapter,
+    image: Image.Image,
+    prompt: List[int],
+    generator: Optional[torch.Generator] = None,
+) -> List[torch.FloatTensor]:
+    latent = model.encode_image(image, generator=generator)
+    prompt_embedding = model.encode_token_ids_with_grad(prompt)
     latents = [latent]
     # From timestep 0 to T
     for timestep in model.get_timesteps(inversion=True):

@@ -45,6 +45,7 @@ def is_valid(row):
 class ImageFetcher:
 
     def __init__(self, batch_size: int = 128, max_threads: int = os.cpu_count()):
+        self.batch_size = batch_size
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_threads)
         # Used to track metrics
         self.stored = self.skipped = self.last_stored = 0
@@ -76,7 +77,7 @@ class ImageFetcher:
         """
         This is the method called by the optimize operator.
         """
-        for rows in df.iter_batches(batch_size=2048):
+        for rows in df.iter_batches(batch_size=self.batch_size):
             rows = [row for row in rows.to_pandas().values.tolist() if is_valid(row) is True]
             futures = [self.thread_pool.submit(catch(download_image_and_prepare), row) for row in rows] 
             for future in concurrent.futures.as_completed(futures):
@@ -104,6 +105,8 @@ def main():
     parser.add_argument("--max_threads", type=int, default=os.cpu_count())
     parser.add_argument("--num_workers", type=int, default=os.cpu_count())
     parser.add_argument("--chunk_mb", type=int, default=64)
+    parser.add_argument("--cache", type=str, default="cache")
+    parser.add_argument("--fast_dev_run", action="store_true")
     args = parser.parse_args()
 
     parquet_files = sorted([
@@ -121,8 +124,9 @@ def main():
         inputs=[parquet_file],
         output_dir=output_dir,
         num_workers=args.num_workers,
+        fast_dev_run=args.fast_dev_run,
         # Splits the parquet files into smaller ones to ease parallelization
-        reader=ParquetReader("cache", num_rows=32768, to_pandas=False),
+        reader=ParquetReader(args.cache, num_rows=32768, to_pandas=False),
         chunk_bytes=f"{args.chunk_mb}MB",
         num_downloaders=0,
     )

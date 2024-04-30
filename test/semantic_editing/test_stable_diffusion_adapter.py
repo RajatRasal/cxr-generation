@@ -1,4 +1,5 @@
 import os
+import pickle
 import pytest
 
 import numpy as np
@@ -7,7 +8,7 @@ import torch
 from PIL import Image
 from diffusers import StableDiffusionPipeline, DDIMInverseScheduler, DDIMScheduler
 
-from semantic_editing.diffusion import StableDiffusionAdapter, ddim_inversion, classifier_free_guidance
+from semantic_editing.diffusion import StableDiffusionAdapter, ddim_inversion, classifier_free_guidance, ddim_inversion_with_token_ids
 from semantic_editing.utils import plot_image_on_axis, save_figure
 
 
@@ -18,6 +19,38 @@ def test_decode_encode_image(sd_adapter_fixture, image_prompt):
     diff = np.abs(np.array(original_image) - np.array(decoded_image))
     median_err = np.median(diff)
     assert median_err == 4
+
+
+def test_ddim_inversion(sd_adapter_fixture, image_prompt_cat_and_dog, image_size, seed):
+    image, prompt, tokens, _ = image_prompt_cat_and_dog
+    latents = ddim_inversion(
+        sd_adapter_fixture,
+        image.resize((image_size, image_size)),
+        prompt,
+        torch.manual_seed(seed),
+    )
+
+    device = sd_adapter_fixture.model.device
+    with open("/vol/biomedic3/rrr2417/cxr-generation/experiments/DPL2/output/catdog/latents/catdog.pkl", 'rb') as f:
+        target_latents = [x.to(device) for x in pickle.load(f)]
+
+    print(latents[2][0, 0, 0, :5])
+    print(target_latents[2][0, 0, 0, :5])
+    assert all([torch.allclose(a, b) for a, b in zip(latents, target_latents)])
+
+
+def test_tokenisation(sd_adapter_fixture, image_prompt):
+    image, prompt = image_prompt
+    words = [word.lower() for word in prompt.split(" ")]
+    n_words = len(words)
+    tokens = sd_adapter_fixture.tokenise_text(prompt, string=True)
+    assert tokens[0] == "<|startoftext|>"
+    assert all([
+        token.endswith("</w>") and token.startswith(word)
+        for token, word in zip(tokens[1:n_words + 1], words)
+    ])
+    assert all([token == "<|endoftext|>" for token in tokens[n_words + 1:]])
+    assert len(tokens) == sd_adapter_fixture.tokenizer.model_max_length
 
 
 def test_get_noise_pred(sd_adapter_fixture, image_prompt, fig_dir):
@@ -35,7 +68,7 @@ def test_get_noise_pred(sd_adapter_fixture, image_prompt, fig_dir):
     save_figure(fig, os.path.join(fig_dir, "test_get_noise_pred.pdf"))
 
 
-def test_ddim_inversion(sd_adapter_fixture, image_prompt, fig_dir):
+def test_ddim_inversion_visualisation(sd_adapter_fixture, image_prompt, fig_dir):
     # TODO: This is not working as expected! We are not seeing the varying
     # steps in the denoising process
     idxs = [
@@ -77,18 +110,4 @@ def test_ddim_inversion(sd_adapter_fixture, image_prompt, fig_dir):
     gen_no_guidance = cfg_with_guidance(1)
     gen_medium_guidance = cfg_with_guidance(4)
     gen_high_guidance = cfg_with_guidance(7.5)
-
-
-def test_tokenisation(sd_adapter_fixture, image_prompt):
-    image, prompt = image_prompt
-    words = [word.lower() for word in prompt.split(" ")]
-    n_words = len(words)
-    tokens = sd_adapter_fixture.tokenise_text(prompt, string=True)
-    assert tokens[0] == "<|startoftext|>"
-    assert all([
-        token.endswith("</w>") and token.startswith(word)
-        for token, word in zip(tokens[1:n_words + 1], words)
-    ])
-    assert all([token == "<|endoftext|>" for token in tokens[n_words + 1:]])
-    assert len(tokens) == sd_adapter_fixture.tokenizer.model_max_length
 

@@ -74,8 +74,7 @@ def attention_map_cluster(
     **clustering_kwargs,
 ) -> np.ndarray:
     res, features = _validate_attn_map(attn_map)
-
-    attn_map_flat = attn_map.cpu().numpy().reshape(res ** 2, -1)
+    attn_map_flat = attn_map.cpu().numpy().reshape(res ** 2, features)
 
     if algorithm == "gmm":
         model = GaussianMixture(
@@ -97,6 +96,10 @@ def attention_map_cluster(
     clusters = model.fit_predict(attn_map_flat)
     clusters = clusters.reshape(res, res)
 
+    # TODO: Print this with logging
+    from collections import Counter
+    print(Counter(list(clusters.flatten())))
+
     return clusters
 
 
@@ -106,32 +109,34 @@ def stable_diffusion_tokens(
     include_separators: bool = False,
 ) -> List[str]:
     word_end = "</w>"
-    separator_start = "<|startoftext|>"
-    separator_end = "<|endoftext|>"
+    separator_start = model.tokenizer.bos_token
+    separator_end = model.tokenizer.eos_token
 
     # TODO: These assertions are all unittests for tokenise_text.
     # Do not include assertions here. Instead, write unittests for 
     # tokenise_text method.
     tokens = model.tokenise_text(prompt, True)
+    n_tokens = len(tokens)
     assert tokens[0] == separator_start
     separator_end_index = tokens.index(separator_end)
     assert all([tok not in [separator_start, separator_end] for tok in tokens[1:separator_end_index]])
 
     suffix_len = len(word_end)
-    tokens = [token[:-suffix_len] for token in tokens[1:separator_end_index]]
+    tokens = [token for token in tokens[1:separator_end_index]]
     if include_separators:
-        tokens = [separator_start] + tokens + [separator_end]
+        tokens = [separator_start] + tokens + [separator_end] * (n_tokens - separator_end_index)
     return tokens
 
 
-def find_noun_indices(model: StableDiffusionAdapter, prompt: str) -> List[Tuple[int, str]]:
-    tokens = stable_diffusion_tokens(model, prompt)
-    pos_tags = nltk.pos_tag(tokens)
-    return [
+def find_tokens_and_noun_indices(model: StableDiffusionAdapter, prompt: str) -> Tuple[List[str], List[Tuple[int, str]]]:
+    tokens = stable_diffusion_tokens(model, prompt, True)
+    pos_tags = nltk.pos_tag(tokens[1:tokens.index(model.tokenizer.eos_token)])
+    index_noun_pairs = [
         (i + 1, token)
         for i, (token, pos_tag) in enumerate(pos_tags)
         if pos_tag[:2] == "NN"
     ]
+    return tokens, index_noun_pairs
 
 
 def localise_nouns(
@@ -238,9 +243,9 @@ def background_mask(
     background_threshold: float = 0.2,
     algorithm: CLUSTERING_ALGORITHM = "kmeans",
     n_clusters: int = 5,
-    cluster_random_state: int = 0,
     attention_resolution: int = 16,
     upscale_size: int = 512,
+    **clustering_kwargs,
 ) -> torch.FloatTensor:
     masks = find_masks(
         attention_store,
@@ -248,7 +253,7 @@ def background_mask(
         background_threshold,
         algorithm,
         n_clusters,
-        random_state=cluster_random_state,
+        **clustering_kwargs,
     )
     bg_map = masks["BG"]
     device = bg_map.device
@@ -260,7 +265,7 @@ def background_mask(
         mode="nearest",
     ).round().bool().float().squeeze(0).squeeze(0)
     bg_map = F_vision.to_pil_image(bg_map)
-    bg_map = F_vision.resize(bg_map, attention_resolution)
+    bg_map = bg_map.resize((attention_resolution, attention_resolution))
     bg_map = F_vision.pil_to_tensor(bg_map).bool().float().to(device)
     return bg_map
 

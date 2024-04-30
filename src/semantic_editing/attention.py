@@ -21,7 +21,7 @@ def _unflatten_attn_map(item: torch.FloatTensor, res: int) -> torch.FloatTensor:
 class AttentionStore(ABC):
 
     def __init__(self):
-        self._num_att_layers = -1
+        self._num_att_layers = 0
         self.reset()
 
     def _attention_store_key_string(
@@ -137,6 +137,11 @@ class AttentionStore(ABC):
 
 class AttentionStoreTimestep(AttentionStore):
 
+    def __init__(self, res: int, is_cross: bool):
+        super().__init__()
+        self.res = res
+        self.is_cross = is_cross
+
     def _accumulate(self, item: List[torch.FloatTensor], res: int) -> List[torch.FloatTensor]:
         return [_unflatten_attn_map(_item, res) for _item in item]
 
@@ -151,6 +156,8 @@ class AttentionStoreTimestep(AttentionStore):
         value: torch.FloatTensor,
     ):
         res = int(math.sqrt(attn.shape[1]))
+        if not (res == self.res and is_cross == self.is_cross):
+            return
         # TODO: As a general class, this should store feature, query, key and value
         # vectors also.
         dict_key = self._attention_store_key_string(place_in_unet, is_cross, "attn", res)
@@ -169,8 +176,8 @@ class AttentionStoreTimestep(AttentionStore):
 
 class AttentionStoreAccumulate(AttentionStore):
 
-    def _accumulate(self, item: torch.FloatTensor, res: int) -> List[torch.FloatTensor]:
-        return [_unflatten_attn_map(item, res)]
+    def _accumulate(self, item: List[torch.FloatTensor], res: int) -> List[torch.FloatTensor]:
+        return [_unflatten_attn_map(_item, res) for _item in item]
 
     def _step_store(
         self,
@@ -187,7 +194,10 @@ class AttentionStoreAccumulate(AttentionStore):
         attn_values = [attn, hidden_states, query, key, value]
         for attn_component, tensor in zip(attn_components, attn_values):
             dict_key = self._attention_store_key_string(place_in_unet, is_cross, attn_component, res)
-            self.step_store[dict_key] = tensor
+            if self.step_store[dict_key] is None:
+                self.step_store[dict_key] = [tensor]
+            else:
+                self.step_store[dict_key].append(tensor)
 
     def _between_steps(self):
         for key, value in self.step_store.items():
@@ -196,7 +206,8 @@ class AttentionStoreAccumulate(AttentionStore):
             if self.attention_store[key] is None:
                 self.attention_store[key] = value
             else:
-                self.attention_store[key] += value
+                for i in range(len(self.attention_store[key])):
+                    self.attention_store[key][i] += value[i]
         self.step_store = self._get_empty_store()
     
     def _get_average_attention(self):
@@ -204,13 +215,17 @@ class AttentionStoreAccumulate(AttentionStore):
         # length and don't assume that cur_step = 50
         cur_step = 50.0
         average_attention = {
-            key: None if item is None else item / cur_step
-            for key, item in self.attention_store.items()
+            key: None if items is None else [item / cur_step for item in items]
+            for key, items in self.attention_store.items()
         }
         return average_attention
 
 
 class AttentionStoreEdit(AttentionStore, ABC):
+
+    def __init__(self, include_store: bool = False):
+        super().__init__()
+        self.include_store = include_store
 
     @abstractmethod
     def _cross_attention_edit_step(self, attn: torch.FloatTensor) -> torch.FloatTensor:
@@ -262,20 +277,21 @@ class AttentionStoreEdit(AttentionStore, ABC):
         value: torch.FloatTensor,
         **kwargs,
     ) -> torch.FloatTensor:
-        self._step_store(
-            attn,
-            is_cross,
-            place_in_unet,
-            hidden_states,
-            query,
-            key,
-            value,
-        )
+        if self.include_store:
+            self._step_store(
+                attn,
+                is_cross,
+                place_in_unet,
+                hidden_states,
+                query,
+                key,
+                value,
+            )
 
-        self._cur_att_layer += 1
-        if self._cur_att_layer == self._num_att_layers:
-            self._cur_att_layer = 0
-            self._between_steps()
+            self._cur_att_layer += 1
+            if self._cur_att_layer == self._num_att_layers:
+                self._cur_att_layer = 0
+                self._between_steps()
 
         return self._edit(
             attn,

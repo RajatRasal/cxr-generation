@@ -6,7 +6,8 @@ authors = ["Rajat Rasal"]
 readme = "README.md"
 packages = [
     { include = "dataset", from = "src" },
-    { include = "semantic_editing", from = "src" }
+    { include = "semantic_editing", from = "src" },
+    { include = "ddpm", from = "src" }
 ]
 
 [tool.poetry.scripts]
@@ -14,8 +15,10 @@ caption_imagenet = "dataset.imagenet_captioning:main"
 laion_400m_download = "dataset.laion_400m:main"
 laion_400m_embed = "dataset.clip:main"
 format_reports = "dataset.create_section_files:cli"
+
 experiments = "semantic_editing.experiments:main"
-nti = "semantic_editing.null_text_inversion:main"
+
+ddpm_train = "ddpm.train:main"
 
 [tool.poetry.dependencies]
 python = "3.9.18"

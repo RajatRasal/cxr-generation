@@ -6,19 +6,21 @@ from torchvision.transforms.functional import to_pil_image
 from torchvision.utils import make_grid
 from tqdm import tqdm
 
-from ddpm.ddpm import GaussianDiffusion, Unet
+from ddpm.ddpm import GaussianDiffusion
+from ddpm.unet import Unet
 
 
 def main():
+    # TODO: Copy in the MNIST binaries into this repo
     # Hyperparamers
     batch_size = 512
     train_timesteps = 200
     sampling_timesteps = 50
-    cond_prob_drop = 0.2
+    cond_prob_drop = 0.6
     latent_dim = 128
     dataset_cache = "/data2/mnist"
     dim_mults = (1, 1, 2)
-    epochs = 20
+    epochs = 300
     guidance_scale = 7.5
     lr = 1e-4
 

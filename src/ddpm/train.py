@@ -20,7 +20,7 @@ def main():
     latent_dim = 128
     dataset_cache = "/data2/mnist"
     dim_mults = (1, 1, 2)
-    epochs = 300
+    epochs = 1000
     guidance_scale = 7.5
     lr = 1e-4
 
@@ -45,6 +45,7 @@ def main():
         image_size=image_size,
         timesteps=train_timesteps,
         sampling_timesteps=sampling_timesteps,
+        ddim_sampling_eta=0,
     ).cuda()
 
     # Optimiser
@@ -56,16 +57,17 @@ def main():
         progress_bar.set_description(f"Epoch: {i} | Loss: N/A")
         for j, (images, labels) in enumerate(train_dataloader):
             optimizer.zero_grad()
-            loss = diffusion(images.cuda(), classes=labels.cuda())
+            model_out, x_start, t, noise = diffusion(images.cuda(), classes=labels.cuda())
+            loss = diffusion.p_losses(model_out, x_start, t, noise)
             loss.backward()
             optimizer.step()
             if j % 10 == 0:
                 progress_bar.update(10)
                 progress_bar.set_description(f"Epoch: {i} | Loss: {round(loss.item(), 5)}")
-        # Sample images from model
+        # Sample images from model - we want deterministic reconstructions => guidance_scale = 1
         sampled_images = diffusion.sample(
             classes=torch.arange(num_classes).cuda(),
-            cond_scale=guidance_scale,
+            cond_scale=1,
         )
         # Save images
         grid = to_pil_image(make_grid(sampled_images, nrow=num_classes))

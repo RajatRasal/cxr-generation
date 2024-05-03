@@ -288,15 +288,15 @@ class GaussianDiffusion(nn.Module):
             extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
-    def p_losses(self, x_start, t, *, classes, noise = None):
-        b, c, h, w = x_start.shape
-        noise = default(noise, lambda: torch.randn_like(x_start))
+    def p_losses(self, model_out, x_start, t, noise=None):
+        # b, c, h, w = x_start.shape
+        # noise = default(noise, lambda: torch.randn_like(x_start))
 
-        # noise sample
-        x = self.q_sample(x_start = x_start, t = t, noise = noise)
+        # # noise sample
+        # x = self.q_sample(x_start = x_start, t = t, noise = noise)
 
-        # predict and take gradient step
-        model_out = self.model(x, t, classes)
+        # # predict and take gradient step
+        # model_out = self.model(x, t, classes)
 
         if self.objective == 'pred_noise':
             target = noise
@@ -314,11 +314,22 @@ class GaussianDiffusion(nn.Module):
         loss = loss * extract(self.loss_weight, t, loss.shape)
         return loss.mean()
 
-    def forward(self, img, *args, **kwargs):
+    def forward(self, img, classes=None, noise=None):
         b, c, h, w, device, img_size, = *img.shape, img.device, self.image_size
         assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
         img = normalize_to_neg_one_to_one(img)
-        return self.p_losses(img, t, *args, **kwargs)
+        x_start = img
+
+        # target noise
+        noise = default(noise, lambda: torch.randn_like(x_start))
+
+        # noise sample
+        x = self.q_sample(x_start=x_start, t=t, noise=noise)
+
+        # predict and take gradient step
+        model_out = self.model(x, t, classes)
+
+        return model_out, x_start, t, noise
 

@@ -11,7 +11,7 @@ from sklearn.decomposition import PCA
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
 
 from semantic_editing.attention import AttentionStore
-from semantic_editing.diffusion import StableDiffusionAdapter
+from semantic_editing.diffusion import PretrainedStableDiffusionAdapter
 from semantic_editing.validate import _validate_attn_map
 
 
@@ -104,7 +104,7 @@ def attention_map_cluster(
 
 
 def stable_diffusion_tokens(
-    model: StableDiffusionAdapter,
+    model: PretrainedStableDiffusionAdapter,
     prompt: str,
     include_separators: bool = False,
 ) -> List[str]:
@@ -128,7 +128,7 @@ def stable_diffusion_tokens(
     return tokens
 
 
-def find_tokens_and_noun_indices(model: StableDiffusionAdapter, prompt: str) -> Tuple[List[str], List[Tuple[int, str]]]:
+def find_tokens_and_noun_indices(model: PretrainedStableDiffusionAdapter, prompt: str) -> Tuple[List[str], List[Tuple[int, str]]]:
     tokens = stable_diffusion_tokens(model, prompt, True)
     pos_tags = nltk.pos_tag(tokens[1:tokens.index(model.tokenizer.eos_token)])
     index_noun_pairs = [

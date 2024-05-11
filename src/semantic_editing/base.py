@@ -37,4 +37,3 @@ class CFGOptimisation(ABC):
     @abstractclassmethod
     def load(cls, dirname: str) -> "CFGOptimisation":
         raise NotImplementedError
-

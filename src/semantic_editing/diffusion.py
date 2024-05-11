@@ -1,23 +1,18 @@
 import os
 import pickle
-from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Literal, Optional, Type, Union
 
 import torch
 import torch.nn.functional as F
-import torchvision.transforms.functional as F_vision
 import numpy as np
 from PIL import Image
 from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeline
-from torch.optim import Adam
-from tqdm import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from semantic_editing.attention import AttentionStore, AttnProcessorWithAttentionStore, prepare_unet
-from semantic_editing.utils import init_stable_diffusion
+from semantic_editing.attention import AttentionStore, AttnProcessorWithAttentionStore
 
 
-class StableDiffusionAdapter:
+class PretrainedStableDiffusionAdapter:
     """
     This wrapper assumes that Stable Diffusion is not being changed in any way by any
     editing algorithms.
@@ -223,7 +218,7 @@ class StableDiffusionAdapter:
             pickle.dump(kwargs, f)
 
     @classmethod
-    def load(cls, dirname: str, device: Literal["cuda", "cpu"]) -> "StableDiffusionAdapter":
+    def load(cls, dirname: str, device: Literal["cuda", "cpu"]) -> "PretrainedStableDiffusionAdapter":
         with open(os.path.join(dirname, "kwargs"), "rb") as f:
             kwargs = pickle.load(f)
         tokenizer = CLIPTokenizer.from_pretrained(kwargs["tokenizer_path"])
@@ -238,7 +233,7 @@ class StableDiffusionAdapter:
 
 @torch.no_grad()
 def classifier_free_guidance_step(
-     model: StableDiffusionAdapter,
+     model: PretrainedStableDiffusionAdapter,
      latent: torch.FloatTensor,
      prompt_embedding: torch.FloatTensor,
      null_embedding: torch.FloatTensor,
@@ -301,7 +296,7 @@ def classifier_free_guidance_step(
 
 @torch.no_grad()
 def classifier_free_guidance(
-    model: StableDiffusionAdapter,
+    model: PretrainedStableDiffusionAdapter,
     latent: torch.FloatTensor,
     prompt: str,
     guidance_scale: float = 7.5,
@@ -324,7 +319,7 @@ def classifier_free_guidance(
 
 @torch.no_grad()
 def ddim_inversion(
-    model: StableDiffusionAdapter,
+    model: PretrainedStableDiffusionAdapter,
     image: Image.Image,
     prompt: str,
     generator: Optional[torch.Generator] = None,
@@ -342,7 +337,7 @@ def ddim_inversion(
 
 @torch.no_grad()
 def ddim_inversion_with_token_ids(
-    model: StableDiffusionAdapter,
+    model: PretrainedStableDiffusionAdapter,
     image: Image.Image,
     prompt: List[int],
     generator: Optional[torch.Generator] = None,

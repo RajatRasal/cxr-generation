@@ -8,7 +8,7 @@ import torch
 from PIL import Image
 from diffusers import StableDiffusionPipeline, DDIMInverseScheduler, DDIMScheduler
 
-from semantic_editing.diffusion import StableDiffusionAdapter, ddim_inversion, classifier_free_guidance, ddim_inversion_with_token_ids
+from semantic_editing.diffusion import PretrainedStableDiffusionAdapter, ddim_inversion, classifier_free_guidance, ddim_inversion_with_token_ids
 from semantic_editing.utils import plot_image_on_axis, save_figure
 
 

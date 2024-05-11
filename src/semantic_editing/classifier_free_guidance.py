@@ -4,14 +4,14 @@ from PIL import Image
 
 from semantic_editing.attention import AttentionStoreAccumulate, AttnProcessorWithAttentionStore
 from semantic_editing.base import CFGOptimisation
-from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, ddim_inversion
+from semantic_editing.diffusion import PretrainedStableDiffusionAdapter, classifier_free_guidance, ddim_inversion
 
 
 class CFGWithDDIM(CFGOptimisation):
 
     def __init__(
         self,
-        model: StableDiffusionAdapter,
+        model: PretrainedStableDiffusionAdapter,
         guidance_scale: int,
         image_size: Optional[int] = None,
         attention_accumulate: bool = False,

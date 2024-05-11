@@ -1,18 +1,12 @@
 import os
-import random
 
 import pytest
 import matplotlib.pyplot as plt
-import numpy as np
-import torch
 from PIL import Image
-from diffusers import StableDiffusionPipeline
 
-from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttnProcessorWithAttentionStore
-from semantic_editing.classifier_free_guidance import CFGWithDDIM
-from semantic_editing.diffusion import StableDiffusionAdapter
+from semantic_editing.diffusion import PretrainedStableDiffusionAdapter
 from semantic_editing.dynamic_prompt_learning import DynamicPromptOptimisation
-from semantic_editing.utils import init_stable_diffusion, seed_everything, device_availability
+from semantic_editing.utils import device_availability
 
 
 GUIDANCE_SCALE_CFG = 7.5
@@ -111,7 +105,7 @@ def jet_cmap():
 
 
 def sd_adapter(model_name, ddim_steps, device="cpu"):
-    return StableDiffusionAdapter(
+    return PretrainedStableDiffusionAdapter(
         model_name,
         ddim_steps=ddim_steps,
         device=device,
@@ -322,14 +316,3 @@ def nti(sd_adapter_fixture, steps, image_size):
         disjoint_object_coeff=0,
         background_leakage_coeff=0,
     )
-
-
-@pytest.fixture
-def cfg_ddim(sd_adapter_fixture, image_size):
-    return CFGWithDDIM(
-        sd_adapter_fixture,
-        guidance_scale=1,
-        image_size=image_size,
-        attention_accumulate=True,
-    )
-

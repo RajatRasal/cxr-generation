@@ -13,12 +13,12 @@ from torchvision.datasets import Flickr8k
 from tqdm import tqdm
 
 from semantic_editing.utils import init_stable_diffusion, seed_everything, plot_image_on_axis
-from semantic_editing.diffusion import StableDiffusionAdapter
+from semantic_editing.diffusion import PretrainedStableDiffusionAdapter
 from semantic_editing.null_text_inversion import CFGOptimisation, NullTokenOptimisation, PromptTokenOptimisation
 
 
 def image_counterfactuals_by_caption(
-    model: StableDiffusionAdapter,
+    model: PretrainedStableDiffusionAdapter,
     optimiser: Type[CFGOptimisation],
     image: Image.Image,
     captions: List[str],
@@ -62,7 +62,7 @@ def load_flickr_captions(ann_file: str, images_path: str) -> pd.DataFrame:
 
 
 def flickr8k_counterfactuals_by_image(
-    model: StableDiffusionAdapter,
+    model: PretrainedStableDiffusionAdapter,
     optimiser: Type[CFGOptimisation],
     df: pd.DataFrame,
     image_ids: List[int],
@@ -104,7 +104,7 @@ def main():
     seed = 88
     seed_everything(seed)
 
-    model = StableDiffusionAdapter(init_stable_diffusion(), args.ddim_steps)
+    model = PretrainedStableDiffusionAdapter(init_stable_diffusion(), args.ddim_steps)
     cfg_kwargs = {"guidance_scale": 7.5, "image_size": 512, "num_inner_steps": 20, "epsilon": 1e-5}
 
     if args.optimiser == "nti":

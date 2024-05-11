@@ -1,24 +1,18 @@
 import math
 import os
 import pickle
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision.transforms.functional as F_vision
 from PIL import Image
-from diffusers import DDIMScheduler, DDIMInverseScheduler, StableDiffusionPipeline
-from diffusers.utils import PIL_INTERPOLATION
 from torch.optim import Adam
 from tqdm import tqdm
 
 from semantic_editing.attention import AttentionStoreAccumulate, AttentionStoreTimestep, AttnProcessorWithAttentionStore, AttentionStoreRefine
 from semantic_editing.base import CFGOptimisation, NULL_STRING
-from semantic_editing.diffusion import StableDiffusionAdapter, classifier_free_guidance, classifier_free_guidance_step, ddim_inversion, ddim_inversion_with_token_ids
+from semantic_editing.diffusion import PretrainedStableDiffusionAdapter, classifier_free_guidance_step, ddim_inversion_with_token_ids
 from semantic_editing.gaussian_smoothing import GaussianSmoothing
-from semantic_editing.utils import seed_everything, init_stable_diffusion, plot_image_on_axis
 from semantic_editing.tools import CLUSTERING_ALGORITHM, background_mask, center_crop, find_tokens_and_noun_indices
 
 
@@ -26,7 +20,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
 
     def __init__(
         self,
-        model: StableDiffusionAdapter,
+        model: PretrainedStableDiffusionAdapter,
         guidance_scale: int,
         num_inner_steps_dpl: int = 50,
         num_inner_steps_nti: int = 20,
@@ -461,7 +455,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
     def load(cls, dirname: str, device: Literal["cuda", "cpu"]) -> "DynamicPromptOptimisation":
         with open(os.path.join(dirname, "hyperparameters.pickle"), "rb") as f:
             hyperparameters = pickle.load(f)
-        model = StableDiffusionAdapter.load(os.path.join(dirname, "model_wrapper"), device)
+        model = PretrainedStableDiffusionAdapter.load(os.path.join(dirname, "model_wrapper"), device)
 
         dpl = cls(model=model, **hyperparameters)
 

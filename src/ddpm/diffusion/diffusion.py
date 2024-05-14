@@ -1,9 +1,10 @@
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 import torch
-from diffusers.schedulers import DDPMScheduler, DDIMScheduler, DDIMInverseScheduler
+from diffusers.schedulers import DDPMScheduler, DDIMScheduler
 from tqdm import tqdm
 
+from ddpm.training.callbacks import DiffusionCallback
 from ddpm.models.unet import Unet
 
 
@@ -92,6 +93,7 @@ class Diffusion:
         guidance_scale: float = 0.0,
         deterministic: bool = False,
         generator: Optional[torch.Generator] = None,
+        callbacks: Optional[List[DiffusionCallback]] = None,
     ) -> torch.FloatTensor:
         x = xT
         timesteps = self.sample_timesteps if deterministic else self.train_timesteps
@@ -103,4 +105,7 @@ class Diffusion:
             else:
                 eps = self.noise_pred(x, t_vector, None)
             x = self._step(scheduler, eps, t, x, generator)
+            if callbacks is not None:
+                for callback in callbacks:
+                    callback(x, t, eps)
         return x

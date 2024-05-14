@@ -10,25 +10,12 @@ import torch.nn.functional as F
 from lightning.pytorch import Trainer, seed_everything
 from sklearn.mixture import GaussianMixture
 from torch.utils.data import DataLoader
-from torch.utils.data.dataset import Dataset
+from torch.utils.data.dataset import Dataset, TensorDataset, StackDataset
 
+from ddpm.training.callbacks import TrajectoryCallback
 from ddpm.models.unet import Unet as Unet1d
 from ddpm.diffusion.diffusion import Diffusion
 from ddpm.datasets.bgmm import gmm_dataset, gmm_stddev_prior, gmm_means_prior, gmm_cluster_prior
-
-
-class Custom_Dataset(Dataset):
-    def __init__(self, _dataset, _conds):
-        self.dataset = _dataset
-        self.conds = _conds
-
-    def __getitem__(self, index):
-        example = self.dataset[index]
-        cond = self.conds[index]
-        return np.array(example), np.array(cond)
-
-    def __len__(self):
-        return len(self.dataset)
 
 
 class DiffusionLightningModule(L.LightningModule):
@@ -51,6 +38,7 @@ class DiffusionLightningModule(L.LightningModule):
         max_clusters: int = 5,
         dataset_size: int = 1000,
         gmm_categories_concentration: float = 0.01,
+        sanity_check: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -79,39 +67,49 @@ class DiffusionLightningModule(L.LightningModule):
         print("Setting up datasets")
 
         # Training data
-        # n_clusters = gmm_cluster_prior(
-        #     min_clusters=self.hparams.min_clusters,
-        #     max_clusters=self.hparams.max_clusters,
-        # )
-        n_clusters = 3
-        self.means = [torch.tensor([-1., 1.]), torch.tensor([1., 1.]), torch.tensor([0., -1.])]
-        # self.means = gmm_means_prior(
-        #     n_clusters=n_clusters,
-        #     dimensions=2, # self.hparams.channels,
-        #     center_box=(-2., 2.),
-        # )
-        stddevs = [torch.tensor(0.5), torch.tensor(0.5), torch.tensor(0.5)]
-        # stddevs = gmm_stddev_prior(
-        #     n_clusters=n_clusters,
-        #     stddev_concentration=1.5,
-        #     stddev_rate=1.,
-        # )
+        if self.hparams.sanity_check:
+            n_clusters = 3
+        else:
+            n_clusters = gmm_cluster_prior(
+                min_clusters=self.hparams.min_clusters,
+                max_clusters=self.hparams.max_clusters,
+            )
+        if self.hparams.sanity_check:
+            self.means = [torch.tensor([-1., 1.]), torch.tensor([1., 1.]), torch.tensor([0., -1.])]
+        else:
+            self.means = gmm_means_prior(
+                n_clusters=n_clusters,
+                dimensions=2,
+                center_box=(-5., 5.),
+            )
+        if self.hparams.sanity_check:
+            stddevs = [torch.tensor(0.5) for _ in range(n_clusters)]
+        else:
+            stddevs = gmm_stddev_prior(
+                n_clusters=n_clusters,
+                stddev_concentration=6.,
+                stddev_rate=4.,
+            )
         print(f"no. of clusters: {n_clusters}, means: {self.means}, stddevs: {stddevs}")
+
         data, cond = gmm_dataset(
             self.hparams.dataset_size,
             means=self.means,
             stddevs=stddevs,
             categories_concentration=self.hparams.gmm_categories_concentration,
         )
-        self.data = data.unsqueeze(1)
-        cond = cond.unsqueeze(2)
-        self._data_df = pd.concat([pd.DataFrame(x, columns=["x", "y"]) for x in self.data])
-        self.dataset = Custom_Dataset(self.data, cond)
+        data = data.unsqueeze(1)
+        self._data_df = pd.concat([pd.DataFrame(x, columns=["x", "y"]) for x in data])
+        # self._data_mean = data.mean(axis=0)
+        # self._data_stddev = data.std(axis=0)
+        self.data = data  # (data - self._data_mean) / self._data_stddev
+        cond = cond.unsqueeze(2)  # (cond.unsqueeze(2) - self._data_mean) / self._data_stddev
+        self.dataset = StackDataset(data=TensorDataset(self.data), conditions=TensorDataset(cond))
 
     def train_dataloader(self):
         return DataLoader(
             dataset=self.dataset,
-            batch_size=1024,
+            batch_size=2048,
             shuffle=True,
             num_workers=1,
         )
@@ -125,7 +123,8 @@ class DiffusionLightningModule(L.LightningModule):
         )
 
     def training_step(self, batch, batch_idx):
-        data, conditions = batch
+        data = batch["data"][0]
+        conditions = batch["conditions"][0]
         batch_size = data.shape[0]
 
         timesteps = torch.randint(0, self.hparams.train_timesteps, (batch_size,)).to(self.device).long()
@@ -143,9 +142,6 @@ class DiffusionLightningModule(L.LightningModule):
         return
 
     def on_validation_epoch_end(self): # , batch, batch_idx):
-        # TODO: FID and IS score
-        print("validation")
-
         diffusion = self._get_diffusion()
 
         # Validation example for visualisation
@@ -157,28 +153,54 @@ class DiffusionLightningModule(L.LightningModule):
         df_x_uncond_original = self._data_df.copy()
         df_x_uncond_original["Dataset"] = "Original"
 
-        def _unconditional_samples(deterministic: bool):
-            title = "DDIM" if deterministic else "DDPM"
-            x_uncond = diffusion.sample(val_noise_for_vis, deterministic=deterministic)
+        fig, axes = plt.subplots(nrows=1, ncols=2)
 
-            fig, ax = plt.subplots(nrows=1, ncols=1)
-            ax.set_xlim(-5, 5)
-            ax.set_ylim(-5, 5)
-            ax.set_title(f"Unconditional {title} Samples")
-            df_x_uncond = pd.concat([pd.DataFrame(x.cpu().numpy(), columns=["x", "y"]) for x in x_uncond])
-            df_x_uncond["Dataset"] = "Samples"
+        def _unconditional_samples(deterministic: bool, n_trajs, iter_chunks, ax_traj):
+            title = "DDIM" if deterministic else "DDPM"
+            trajectory_callback = TrajectoryCallback()
+            callbacks = [trajectory_callback]
+            x_uncond = diffusion.sample(val_noise_for_vis, deterministic=deterministic, callbacks=callbacks)
+
+            # Trajectory plot overlaid with KDE from data
+            ax_traj.set_title(f"Unconditional {title} Trajectory")
             sns.kdeplot(
-                pd.concat([df_x_uncond, df_x_uncond_original]),
+                df_x_uncond_original,
                 x="x",
                 y="y",
-                hue="Dataset",
+                ax=ax_traj,
+                fill=True,
+            )
+            trajectory_callback.plot(n=n_trajs, iter_chunks=iter_chunks, ax=ax_traj)
+
+            # KDE from data vs KDE from samples
+            fig, ax = plt.subplots(nrows=1, ncols=1)
+            ax.set_xlim(-7, 7)
+            ax.set_ylim(-7, 7)
+            ax.set_title(f"Unconditional {title} Samples")
+            df_x_uncond = pd.concat([pd.DataFrame(x.cpu().numpy(), columns=["x", "y"]) for x in x_uncond])
+            sns.kdeplot(
+                df_x_uncond_original,
+                x="x",
+                y="y",
+                label="Original",
+                ax=ax,
+            )
+            sns.kdeplot(
+                df_x_uncond,
+                x="x",
+                y="y",
+                label="Samples",
                 ax=ax,
             )
             fig.tight_layout()
             fig.savefig(f"experiment_samples/unconditional_{title}_{self.current_epoch}.png", format="png")
 
-        _unconditional_samples(True)
-        _unconditional_samples(False)
+        _unconditional_samples(True, 20, 1, axes[0])
+        _unconditional_samples(False, 20, self.hparams.train_timesteps // 10, axes[1])
+
+        axes[0].legend()
+        fig.tight_layout()
+        fig.savefig(f"experiment_samples/unconditional_trajectory_{self.current_epoch}.pdf", format="pdf")
 
         # fig, axes = plt.subplots(nrows=1, ncols=len(self.means))
         # for ax, mean in zip(axes, self.means):
@@ -200,7 +222,7 @@ class DiffusionLightningModule(L.LightningModule):
 
 def main():
     # TODO: run experiments where we vary all aspects of the dataset, including number of cluster
-    seed_everything(10)
+    seed_everything(0)
 
     diffusion = DiffusionLightningModule(
         dim=20,
@@ -210,6 +232,9 @@ def main():
         sample_timesteps=50,
         dataset_size=10000,
         beta_schedule="cosine",
+        min_clusters=2,
+        max_clusters=5,
+        sanity_check=True,
     )
     trainer = Trainer(accelerator="gpu", max_epochs=1000, check_val_every_n_epoch=100)
     trainer.fit(diffusion)

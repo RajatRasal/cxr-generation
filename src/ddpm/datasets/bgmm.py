@@ -34,73 +34,52 @@ def gmm_stddev_prior(
     return stddevs
 
 
-def sample_gmm(
-    means: List[torch.FloatTensor],
-    stddevs: List[torch.FloatTensor],
-    categories_concentration: float = 0.01,
-    # n_samples: int = 1000,
-) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
-    """
-    A GMM with Dirichlet prior over the categories, so that we can control the number
-    of datapoints sampled from each category, i.e. if concentration is small each sample
-    will be primarily centered around one of the categories.
-
-    We place a uniform prior over the means, such that each category's mean can fall
-    uniformly anywhere within the box between (center_box[0], center_box[0]) and 
-    (center_box[1], center_box[1]).
-
-    A gamma prior is placed over the stddevs, such most blobs have a stddev focussed
-    around the mode of the gamma distribution.
-    """
-    assert len(means) == len(stddevs)
-    assert categories_concentration < 0.1
-
-    # stddev for mvn
-    dim = len(means[0])
-    scales_tril = [torch.diag(stddev * torch.ones((dim,))) for stddev in stddevs]
-
-    # prior over categories
-    dirichlet = Dirichlet(categories_concentration * torch.ones(len(means)))
+def gmm_mixture_probs_prior(
+    categories_concentration: float,
+    n_clusters: int,
+) -> torch.FloatTensor:
+    dirichlet = Dirichlet(categories_concentration * torch.ones(n_clusters))
     categorical_probs = dirichlet.sample()
+    return categorical_probs
 
-    # gmm
-    cat = Categorical(categorical_probs)
-    mvns = [MultivariateNormal(means[comp], scale_tril=scales_tril[comp]) for comp in range(len(means))]
+# TODO: Instead of returning tuples, we should return data classes.
+class GMM:
 
-    # 1 data point
-    _class = torch.argmax(categorical_probs)
-    return mvns[cat.sample()].sample(), means[_class]
+    def __init__(
+        self,
+        means: List[torch.FloatTensor],
+        covs: List[torch.FloatTensor],
+        mixture_probs: torch.FloatTensor,
+    ):
+        assert len(means) == len(covs) == mixture_probs.shape[0]
+        assert mixture_probs.sum() == 1
 
+        self.means = means
+        self.covs = covs
+        self.mixture_probs = mixture_probs
 
-def gmm_dataset(N: int = 1000, **gmm_kwargs) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
-    # TODO: Add option to return true means as conditions
-    data = []
-    cond = []
-    for _ in tqdm(range(N)):
-        _data, _cond = sample_gmm(**gmm_kwargs)
-        data.append(_data.unsqueeze(0))
-        cond.append(_cond.unsqueeze(0))
-    data = torch.cat(data)
-    cond = torch.cat(cond)
-    return data, cond    
+        self.cat = Categorical(self.mixture_probs)
+        self.mvns = [MultivariateNormal(mean, cov) for mean, cov in zip(self.means, self.covs)]
 
+    def sample(self) -> Tuple[torch.FloatTensor, torch.IntTensor]:
+        # (x, z) ~ p(x, z)
+        mixture = self.cat.sample()
+        return self.mvns[mixture].sample(), mixture
 
-# def gmm_dataset(N: int = 1000, cond_estimate: bool = True, **gmm_kwargs) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
-#     dataset = []
-#     conds = []
-#     for _ in tqdm(range(N)):
-#         data_point, mean = gmm(**gmm_kwargs)
-#         data_point = data_point.unsqueeze(0).transpose(1, 2)
-#         dataset.append(data_point)
-#         if cond_estimate:
-#             # cond = empirical mean
-#             cond = data_point.squeeze(0).mean(axis=1).unsqueeze(0)
-#         else:
-#             # cond = a gmm mode = mean of the gmm component
-#             cond = mean
-#         print(cond.shape)
-#         print(data_point.shape)
-#         conds.append(cond)
-#     conds = torch.cat(conds)
-#     dataset = torch.cat(dataset)
-#     return dataset, conds
+    def get_mixture_parameters(self, mixture: torch.IntTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        return self.means[mixture.item()], self.covs[mixture.item()]
+
+    def samples(self, N: int) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        # [(x_1, z_1), (x_2, z_2), ..., (x_N, z_N)]
+        data = []
+        mixtures = []
+        for _ in tqdm(range(N)):
+            _data, _mixture = self.sample()
+            data.append(_data.unsqueeze(0))
+            mixtures.append(_mixture.unsqueeze(0))
+        data = torch.cat(data)
+        mixtures = torch.cat(mixtures)
+        return data, mixtures
+
+    def log_likelihood(self, samples: torch.FloatTensor) -> torch.FloatTensor:
+        return 

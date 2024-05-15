@@ -2,20 +2,18 @@ from typing import List, Literal
 
 import lightning as L
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn.functional as F
 from lightning.pytorch import Trainer, seed_everything
-from sklearn.mixture import GaussianMixture
 from torch.utils.data import DataLoader
-from torch.utils.data.dataset import Dataset, TensorDataset, StackDataset
+from torch.utils.data.dataset import TensorDataset, StackDataset
 
 from ddpm.training.callbacks import TrajectoryCallback
 from ddpm.models.unet import Unet as Unet1d
 from ddpm.diffusion.diffusion import Diffusion
-from ddpm.datasets.bgmm import gmm_dataset, gmm_stddev_prior, gmm_means_prior, gmm_cluster_prior
+from ddpm.datasets.bgmm import GMM, gmm_stddev_prior, gmm_means_prior, gmm_cluster_prior, gmm_mixture_probs_prior
 
 
 class DiffusionLightningModule(L.LightningModule):
@@ -75,36 +73,52 @@ class DiffusionLightningModule(L.LightningModule):
                 max_clusters=self.hparams.max_clusters,
             )
         if self.hparams.sanity_check:
-            self.means = [torch.tensor([-1., 1.]), torch.tensor([1., 1.]), torch.tensor([0., -1.])]
+            self.means = [torch.tensor([-2., 2.]), torch.tensor([2., 2.]), torch.tensor([0., -2.])]
         else:
             self.means = gmm_means_prior(
                 n_clusters=n_clusters,
                 dimensions=2,
                 center_box=(-5., 5.),
             )
+        dims = self.means[0].shape[0]
         if self.hparams.sanity_check:
-            stddevs = [torch.tensor(0.5) for _ in range(n_clusters)]
+            covs = [torch.eye(dims) * 0.5 for _ in range(n_clusters)]
         else:
             stddevs = gmm_stddev_prior(
                 n_clusters=n_clusters,
                 stddev_concentration=6.,
                 stddev_rate=4.,
             )
-        print(f"no. of clusters: {n_clusters}, means: {self.means}, stddevs: {stddevs}")
+            covs = [torch.eye(dims) * stddev for stddev in stddevs]
+        if self.hparams.sanity_check:
+            mixture_probs = torch.tensor([1 / n_clusters for _ in range(n_clusters)])
+        else:
+            mixture_probs = gmm_mixture_probs_prior(
+                self.hparams.gmm_categories_concentration,
+                n_clusters,
+            )
+        print(f"no. of clusters: {n_clusters}")
+        print(f"means: {self.means}")
+        print(f"covs:\n{covs}")
 
-        data, cond = gmm_dataset(
-            self.hparams.dataset_size,
-            means=self.means,
-            stddevs=stddevs,
-            categories_concentration=self.hparams.gmm_categories_concentration,
+        self.data_gen_process = GMM(
+            self.means,
+            covs,
+            mixture_probs,
         )
+        data, mixtures = self.data_gen_process.samples(self.hparams.dataset_size)
         data = data.unsqueeze(1)
         self._data_df = pd.concat([pd.DataFrame(x, columns=["x", "y"]) for x in data])
         # self._data_mean = data.mean(axis=0)
         # self._data_stddev = data.std(axis=0)
         self.data = data  # (data - self._data_mean) / self._data_stddev
-        cond = cond.unsqueeze(2)  # (cond.unsqueeze(2) - self._data_mean) / self._data_stddev
-        self.dataset = StackDataset(data=TensorDataset(self.data), conditions=TensorDataset(cond))
+        # conditioning the DDPM on the cluster means = mode
+        conditions = torch.cat([
+            self.data_gen_process.get_mixture_parameters(mixture)[0].unsqueeze(0)
+            for mixture in mixtures
+        ])
+        conditions = conditions.unsqueeze(2)  # (cond.unsqueeze(2) - self._data_mean) / self._data_stddev
+        self.dataset = StackDataset(data=TensorDataset(self.data), conditions=TensorDataset(conditions))
 
     def train_dataloader(self):
         return DataLoader(
@@ -153,7 +167,7 @@ class DiffusionLightningModule(L.LightningModule):
         df_x_uncond_original = self._data_df.copy()
         df_x_uncond_original["Dataset"] = "Original"
 
-        fig, axes = plt.subplots(nrows=1, ncols=2)
+        fig, axes = plt.subplots(nrows=1, ncols=2) # , figsize=(15, 5))
 
         def _unconditional_samples(deterministic: bool, n_trajs, iter_chunks, ax_traj):
             title = "DDIM" if deterministic else "DDPM"
@@ -162,7 +176,7 @@ class DiffusionLightningModule(L.LightningModule):
             x_uncond = diffusion.sample(val_noise_for_vis, deterministic=deterministic, callbacks=callbacks)
 
             # Trajectory plot overlaid with KDE from data
-            ax_traj.set_title(f"Unconditional {title} Trajectory")
+            ax_traj.set_title(f"{title} Trajectory")
             sns.kdeplot(
                 df_x_uncond_original,
                 x="x",
@@ -171,12 +185,15 @@ class DiffusionLightningModule(L.LightningModule):
                 fill=True,
             )
             trajectory_callback.plot(n=n_trajs, iter_chunks=iter_chunks, ax=ax_traj)
+            ax_traj.set_xlabel("")
+            ax_traj.set_ylabel("")
+            # ax_traj.get_legend().remove()
 
             # KDE from data vs KDE from samples
             fig, ax = plt.subplots(nrows=1, ncols=1)
             ax.set_xlim(-7, 7)
             ax.set_ylim(-7, 7)
-            ax.set_title(f"Unconditional {title} Samples")
+            ax.set_title(f"{title} Samples")
             df_x_uncond = pd.concat([pd.DataFrame(x.cpu().numpy(), columns=["x", "y"]) for x in x_uncond])
             sns.kdeplot(
                 df_x_uncond_original,
@@ -198,7 +215,6 @@ class DiffusionLightningModule(L.LightningModule):
         _unconditional_samples(True, 20, 1, axes[0])
         _unconditional_samples(False, 20, self.hparams.train_timesteps // 10, axes[1])
 
-        axes[0].legend()
         fig.tight_layout()
         fig.savefig(f"experiment_samples/unconditional_trajectory_{self.current_epoch}.pdf", format="pdf")
 

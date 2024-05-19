@@ -64,7 +64,7 @@ class DiffusionLightningModule(L.LightningModule):
     def setup(self, *args, **kwargs):
         print("Setting up datasets")
 
-        # Training data
+        # Sampling from Bayesian GMM
         if self.hparams.sanity_check:
             n_clusters = 3
         else:
@@ -109,15 +109,19 @@ class DiffusionLightningModule(L.LightningModule):
         data, mixtures = self.data_gen_process.samples(self.hparams.dataset_size)
         data = data.unsqueeze(1)
         self._data_df = pd.concat([pd.DataFrame(x, columns=["x", "y"]) for x in data])
-        # self._data_mean = data.mean(axis=0)
-        # self._data_stddev = data.std(axis=0)
-        self.data = data  # (data - self._data_mean) / self._data_stddev
-        # conditioning the DDPM on the cluster means = mode
+
+        # Standardising data for VP-SDE
+        self._data_mean = data.mean(axis=0)
+        self._data_stddev = data.std(axis=0)
+        self.data = (data - self._data_mean) / self._data_stddev
+
+        # Conditioning the DDPM on the GMM cluster means = mode
         conditions = torch.cat([
             self.data_gen_process.get_mixture_parameters(mixture)[0].unsqueeze(0)
             for mixture in mixtures
         ])
-        conditions = conditions.unsqueeze(2)  # (cond.unsqueeze(2) - self._data_mean) / self._data_stddev
+        conditions = conditions.unsqueeze(2)
+
         self.dataset = StackDataset(data=TensorDataset(self.data), conditions=TensorDataset(conditions))
 
     def train_dataloader(self):
@@ -163,60 +167,56 @@ class DiffusionLightningModule(L.LightningModule):
         generator = torch.cuda.manual_seed(0) if "cuda" in str(self.device) else torch.manual_seed(0)
         val_noise_for_vis = torch.randn(self.data[:n_samples].shape, generator=generator, device=self.device)
 
-        ## Unconditional sampling visualisations
         df_x_uncond_original = self._data_df.copy()
         df_x_uncond_original["Dataset"] = "Original"
 
-        fig, axes = plt.subplots(nrows=1, ncols=2) # , figsize=(15, 5))
+        fig_traj, axes_traj = plt.subplots(nrows=1, ncols=2) # , figsize=(15, 5))
+        fig_samples, axes_samples = plt.subplots(nrows=1, ncols=2) # , figsize=(15, 5))
 
-        def _unconditional_samples(deterministic: bool, n_trajs, iter_chunks, ax_traj):
+        def _unconditional_samples(deterministic: bool, n_trajs, ax_traj, ax_samples):
             title = "DDIM" if deterministic else "DDPM"
             trajectory_callback = TrajectoryCallback()
             callbacks = [trajectory_callback]
             x_uncond = diffusion.sample(val_noise_for_vis, deterministic=deterministic, callbacks=callbacks)
+            x_uncond = x_uncond * self._data_stddev.to(self.device) + self._data_mean.to(self.device)
 
             # Trajectory plot overlaid with KDE from data
-            ax_traj.set_title(f"{title} Trajectory")
-            sns.kdeplot(
-                df_x_uncond_original,
-                x="x",
-                y="y",
-                ax=ax_traj,
-                fill=True,
-            )
-            trajectory_callback.plot(n=n_trajs, iter_chunks=iter_chunks, ax=ax_traj)
+            ax_traj.set_title(f"{title}")
+            # TODO: Include KDE plot on the y-axis on the right hand side
+            trajectory_callback.plot(n=n_trajs, ax=ax_traj, dim=1)
             ax_traj.set_xlabel("")
             ax_traj.set_ylabel("")
-            # ax_traj.get_legend().remove()
 
             # KDE from data vs KDE from samples
-            fig, ax = plt.subplots(nrows=1, ncols=1)
-            ax.set_xlim(-7, 7)
-            ax.set_ylim(-7, 7)
-            ax.set_title(f"{title} Samples")
+            ax_samples.set_xlim(-7, 7)
+            ax_samples.set_ylim(-7, 7)
+            ax_samples.set_title(f"{title}")
             df_x_uncond = pd.concat([pd.DataFrame(x.cpu().numpy(), columns=["x", "y"]) for x in x_uncond])
             sns.kdeplot(
                 df_x_uncond_original,
                 x="x",
                 y="y",
                 label="Original",
-                ax=ax,
+                ax=ax_samples,
             )
             sns.kdeplot(
                 df_x_uncond,
                 x="x",
                 y="y",
                 label="Samples",
-                ax=ax,
+                ax=ax_samples,
             )
-            fig.tight_layout()
-            fig.savefig(f"experiment_samples/unconditional_{title}_{self.current_epoch}.png", format="png")
+            ax_samples.set_xlabel("")
+            ax_samples.set_ylabel("")
 
-        _unconditional_samples(True, 20, 1, axes[0])
-        _unconditional_samples(False, 20, self.hparams.train_timesteps // 10, axes[1])
+        _unconditional_samples(True, 20, axes_traj[0], axes_samples[0])
+        _unconditional_samples(False, 20, axes_traj[1], axes_samples[1])
 
-        fig.tight_layout()
-        fig.savefig(f"experiment_samples/unconditional_trajectory_{self.current_epoch}.pdf", format="pdf")
+        fig_samples.tight_layout()
+        fig_samples.savefig(f"experiment_samples/samples_{self.current_epoch}.png", format="png")
+
+        fig_traj.tight_layout()
+        fig_traj.savefig(f"experiment_samples/trajectory_{self.current_epoch}.pdf", format="pdf")
 
         # fig, axes = plt.subplots(nrows=1, ncols=len(self.means))
         # for ax, mean in zip(axes, self.means):

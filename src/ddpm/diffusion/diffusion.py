@@ -95,6 +95,7 @@ class Diffusion:
         generator: Optional[torch.Generator] = None,
         callbacks: Optional[List[DiffusionCallback]] = None,
     ) -> torch.FloatTensor:
+        # (batch_size, 1, dims)
         x = xT
         timesteps = self.sample_timesteps if deterministic else self.train_timesteps
         scheduler = self.ddim_scheduler if deterministic else self.ddpm_scheduler

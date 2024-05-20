@@ -52,7 +52,7 @@ class GMM:
         mixture_probs: torch.FloatTensor,
     ):
         assert len(means) == len(covs) == mixture_probs.shape[0]
-        assert mixture_probs.sum() == 1
+        assert torch.isclose(mixture_probs.sum(), torch.tensor(1.)), f"{mixture_probs.sum()}"
 
         self.means = means
         self.covs = covs
@@ -82,4 +82,7 @@ class GMM:
         return data, mixtures
 
     def log_likelihood(self, samples: torch.FloatTensor) -> torch.FloatTensor:
-        return 
+        likelihood = 0.0
+        for mix_prob, mvn in zip(self.mixture_probs, self.mvns):
+            likelihood += mix_prob * mvn.log_prob(samples).exp()
+        return likelihood.log().sum()

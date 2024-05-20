@@ -9,7 +9,7 @@ from ddpm.training.plots import trajectory_plot
 def test_trajectory_callback():
     # build test dataset as a forward diffusion process
     mean = 5.
-    T = 100
+    T = 1000
     N = 500
     scheduler = DDPMScheduler(num_train_timesteps=T, beta_schedule="squaredcos_cap_v2")
     trajectories = []

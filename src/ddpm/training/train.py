@@ -70,6 +70,7 @@ class DiffusionLightningModule(L.LightningModule):
             self.hparams.context_dim,
         )
         self.center_box = (-self.hparams.center_box, self.hparams.center_box)
+        self.null_token = torch.randn((2, 1), generator=get_generator(self.hparams.dataset_seed, self.device))
 
     def _get_diffusion(self) -> Diffusion:
         return Diffusion(
@@ -214,6 +215,7 @@ class DiffusionLightningModule(L.LightningModule):
     ) -> torch.FloatTensor:
         recon = diffusion.sample(
             noise,
+            self.null_token.unsqueeze(0).repeat((conditions.shape[0], 1, 1)).to(self.device) if conditions is not None else None,
             conditions,
             guidance_scale=guidance_scale,
             deterministic=deterministic,
@@ -240,6 +242,7 @@ class DiffusionLightningModule(L.LightningModule):
     ) -> torch.FloatTensor:
         recon = diffusion.sample(
             noise,
+            self.null_token.unsqueeze(0).repeat((conditions.shape[0], 1, 1)).to(self.device) if conditions is not None else None,
             conditions,
             guidance_scale=guidance_scale,
             deterministic=deterministic,
@@ -299,7 +302,8 @@ class DiffusionLightningModule(L.LightningModule):
         # Training model
         timesteps = torch.randint(0, self.hparams.train_timesteps, (batch_size,)).to(self.device).long()
         noise = torch.randn_like(data).to(self.device)
-        training_conditions = None if torch.rand(1) < self.hparams.uncond_prob else conditions
+        # training_conditions = None if torch.rand(1) < self.hparams.uncond_prob else conditions
+        training_conditions = self.null_token.unsqueeze(0).repeat((conditions.shape[0], 1, 1)).to(self.device) if torch.rand(1) < self.hparams.uncond_prob else conditions
 
         diffusion = self._get_diffusion()
         noisy_data = diffusion.add_noise(data, noise, timesteps)
@@ -365,6 +369,7 @@ class DiffusionLightningModule(L.LightningModule):
             sample_callback = TrajectoryCallback()
             samples = diffusion.sample(
                 ddim_inversion if inverse else random_noise,
+                self.null_token.unsqueeze(0).repeat((conditions.shape[0], 1, 1)).to(self.device) if conditions is not None else None,
                 conditions=conditions,
                 deterministic=deterministic,
                 timesteps="sample",
@@ -393,6 +398,7 @@ class DiffusionLightningModule(L.LightningModule):
                     save_path=os.path.join(self.hparams.folder, f"{plot_name}_y"),
                     true_data=data[:, 0, 1].cpu().numpy(),
                 )
+                # TODO: KDE plot 
             else:
                 plotter_x = partial(
                     trajectory_plot_1d,
@@ -406,6 +412,7 @@ class DiffusionLightningModule(L.LightningModule):
                     save_path=os.path.join(self.hparams.folder, f"{plot_name}_y"),
                     true_data=data[:, 0, 1].cpu().numpy(),
                 )
+                # TODO: KDE plot 
 
             kwargs = dict(
                 T=self.hparams.sample_timesteps,
@@ -499,6 +506,7 @@ class DiffusionLightningModule(L.LightningModule):
         )
 
         # TODO: KDE plots for edits and cfg guidance
+        # TODO: Interpolation - pick a few ddim_inversion and random samples
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.unet.parameters(), lr=1e-5)

@@ -66,10 +66,11 @@ class Diffusion:
         self,
         x: torch.FloatTensor,
         t: torch.LongTensor,
+        null_token: torch.FloatTensor,
         conditions: torch.FloatTensor,
         guidance_scale: float,
     ) -> torch.FloatTensor:
-        eps_uncond = self.noise_pred(x, t, None)
+        eps_uncond = self.noise_pred(x, t, null_token)
         eps_cond = self.noise_pred(x, t, conditions)
         eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
         return eps
@@ -89,6 +90,7 @@ class Diffusion:
     def sample(
         self,
         xT: torch.FloatTensor,
+        null_token: Optional[torch.FloatTensor] = None,
         conditions: Optional[torch.FloatTensor] = None,
         guidance_scale: float = 0.0,
         deterministic: bool = False,
@@ -108,7 +110,7 @@ class Diffusion:
         for t in tqdm(reversed(range(timesteps)), desc="Sampling", disable=disable_progress_bar):
             t_vector = torch.full((x.shape[0],), t, dtype=torch.long, device=self.device)
             if conditions is not None:
-                eps = self._guidance(x, t_vector, conditions, guidance_scale)
+                eps = self._guidance(x, t_vector, null_token, conditions, guidance_scale)
             else:
                 eps = self.noise_pred(x, t_vector, None)
             x = scheduler.step(eps, t, x, generator=generator).prev_sample

@@ -331,7 +331,7 @@ def visualise_gmm(
         sns.kdeplot(data=original_df, x="x", y="y", ax=ax, fill=True, thresh=0.2, levels=5, cmap="Purples")
 
         for i, keypoint in enumerate(keypoints):
-            ax.scatter(keypoint[0], keypoint[1], marker="x", c="#4A993A", s=0.2, linewidths=0.2)  # "#4A993A")
+            ax.scatter(keypoint[0], keypoint[1], marker="x", c="#4A993A", s=0.5, linewidths=0.5)  # "#4A993A")
             ax.annotate(str(i), (keypoint[0] + 0.1, keypoint[1] + 0.1))
 
         ax.set_xlabel("")

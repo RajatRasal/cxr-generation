@@ -1,7 +1,7 @@
 from typing import List, Literal, Optional, Union
 
 import torch
-from diffusers.schedulers import DDPMScheduler, DDIMScheduler
+from diffusers.schedulers import DDPMScheduler, DDIMScheduler, DDIMInverseScheduler
 from tqdm import tqdm
 
 from ddpm.training.callbacks import DiffusionCallback
@@ -24,6 +24,7 @@ class Diffusion:
         self.device = device
         
         self.train_timesteps = train_timesteps
+        # TODO: Pass in sample timesteps into sample + ddim_inversion methods and not in constructor
         self.sample_timesteps = sample_timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -33,6 +34,7 @@ class Diffusion:
             "cosine": "squaredcos_cap_v2",
         }[beta_schedule]
 
+        # Image generation schedulers
         self.ddpm_scheduler = DDPMScheduler(
             num_train_timesteps=self.train_timesteps,
             beta_start=self.beta_start,
@@ -41,7 +43,6 @@ class Diffusion:
             prediction_type="epsilon",
         )
         self.ddpm_scheduler.alphas_cumprod = self.ddpm_scheduler.alphas_cumprod.to(device=self.device)
-        self.ddpm_scheduler.set_timesteps(num_inference_steps=self.sample_timesteps, device=self.device)
         self.ddim_scheduler = DDIMScheduler(
             num_train_timesteps=self.train_timesteps,
             beta_start=self.beta_start,
@@ -50,17 +51,16 @@ class Diffusion:
             prediction_type="epsilon",
         )
         self.ddim_scheduler.alphas_cumprod = self.ddim_scheduler.alphas_cumprod.to(device=self.device)
-        self.ddim_scheduler.set_timesteps(num_inference_steps=self.sample_timesteps, device=self.device)
 
-    def _step(
-        self,
-        scheduler: Union[DDPMScheduler, DDIMScheduler],
-        eps: torch.FloatTensor,
-        t: torch.LongTensor,
-        x: torch.FloatTensor,
-        generator: torch.Generator,
-    ) -> torch.FloatTensor:
-        return scheduler.step(eps, t, x, generator=generator).prev_sample
+        # Image inversion scheduler
+        self.ddim_inverse_scheduler = DDIMInverseScheduler(
+            num_train_timesteps=self.train_timesteps,
+            beta_start=self.beta_start,
+            beta_end=self.beta_end,
+            beta_schedule=self.beta_schedule,
+            prediction_type="epsilon",
+        )
+        self.ddim_inverse_scheduler.alphas_cumprod = self.ddim_inverse_scheduler.alphas_cumprod.to(device=self.device)
 
     def _guidance(
         self,
@@ -92,20 +92,51 @@ class Diffusion:
         conditions: Optional[torch.FloatTensor] = None,
         guidance_scale: float = 0.0,
         deterministic: bool = False,
+        timesteps: Literal["train", "sample"] = "train",
         generator: Optional[torch.Generator] = None,
         callbacks: Optional[List[DiffusionCallback]] = None,
+        disable_progress_bar: bool = False,
     ) -> torch.FloatTensor:
         # (batch_size, 1, dims)
         x = xT
-        timesteps = self.sample_timesteps if deterministic else self.train_timesteps
+        timesteps = {"train": self.train_timesteps, "sample": self.sample_timesteps}[timesteps]
         scheduler = self.ddim_scheduler if deterministic else self.ddpm_scheduler
-        for t in tqdm(reversed(range(timesteps)), desc="Sampling"):
+        scheduler.set_timesteps(num_inference_steps=timesteps, device=self.device)
+        if callbacks is not None:
+            for callback in callbacks:
+                callback(x, None, None)
+        for t in tqdm(reversed(range(timesteps)), desc="Sampling", disable=disable_progress_bar):
             t_vector = torch.full((x.shape[0],), t, dtype=torch.long, device=self.device)
             if conditions is not None:
                 eps = self._guidance(x, t_vector, conditions, guidance_scale)
             else:
                 eps = self.noise_pred(x, t_vector, None)
-            x = self._step(scheduler, eps, t, x, generator)
+            x = scheduler.step(eps, t, x, generator=generator).prev_sample
+            if callbacks is not None:
+                for callback in callbacks:
+                    callback(x, t_vector, eps)
+        return x
+
+    @torch.no_grad()
+    def ddim_inversion(
+        self,
+        x0: torch.FloatTensor,
+        conditions: Optional[torch.FloatTensor] = None,
+        timesteps: Literal["train", "sample"] = "train",
+        callbacks: Optional[List[DiffusionCallback]] = None,
+        disable_progress_bar: bool = False,
+    ) -> torch.FloatTensor:
+        # (batch_size, 1, dims)
+        x = x0
+        timesteps = {"train": self.train_timesteps, "sample": self.sample_timesteps}[timesteps]
+        self.ddim_inverse_scheduler.set_timesteps(num_inference_steps=timesteps, device=self.device)
+        if callbacks is not None:
+            for callback in callbacks:
+                callback(x, None, None)
+        for t in tqdm(range(0, timesteps), desc="Inversion", disable=disable_progress_bar):
+            t_vector = torch.full((x.shape[0],), t, dtype=torch.long, device=self.device)
+            eps = self.noise_pred(x, t_vector, conditions)
+            x = self.ddim_inverse_scheduler.step(eps, t, x).prev_sample
             if callbacks is not None:
                 for callback in callbacks:
                     callback(x, t, eps)

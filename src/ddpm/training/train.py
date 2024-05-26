@@ -1,6 +1,8 @@
+import logging
 import os
 import random
-from typing import List, Literal, Tuple
+from functools import partial
+from typing import Dict, List, Literal, Optional, Tuple
 
 import lightning as L
 import matplotlib.pyplot as plt
@@ -11,21 +13,27 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
-from torch.utils.data import DataLoader
+from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader, random_split
 from torch.utils.data.dataset import TensorDataset, StackDataset
+from torchmetrics.classification import MulticlassConfusionMatrix
+from torchmetrics.utilities.plot import plot_confusion_matrix
 
+from ddpm.training.plots import trajectory_plot_1d, visualise_gmm, trajectory_plot_1d_with_inverse
 from ddpm.training.callbacks import TrajectoryCallback
-from ddpm.training.plots import trajectory_plot_1d, kde_plot_2d_compare, kde_plot_2d
 from ddpm.models.unet import Unet as Unet1d
 from ddpm.diffusion.diffusion import Diffusion
 from ddpm.datasets.bgmm import GMM, gmm_stddev_prior, gmm_means_prior, gmm_cluster_prior, gmm_mixture_probs_prior
+from ddpm.utils import get_generator
 
 
 class DiffusionLightningModule(L.LightningModule):
 
     def __init__(
         self,
+        batch_size: int = 2048,
         dim: int = 20,
         dim_mults: List[int] = [1, 2, 4, 8],
         channels: int = 1,
@@ -38,6 +46,7 @@ class DiffusionLightningModule(L.LightningModule):
         beta_end: float = 0.02,
         beta_schedule: Literal["linear", "scaled_linear", "cosine"] = "linear",
         uncond_prob: float = 0.25,
+        dataset_seed: int = 0,
         min_clusters: int = 2,
         max_clusters: int = 5,
         dataset_size: int = 1000,
@@ -74,12 +83,18 @@ class DiffusionLightningModule(L.LightningModule):
         )
 
     def setup(self, stage):
-        # TODO: Use prepare_data
-        if stage != "fit":
-            return
+        """
+        Assign train/val split(s) for use in Dataloaders. This method is called from every process
+        across all nodes, hence why state is set here.
 
-        print("Setting up datasets")
-        # Sampling from Bayesian GMM
+        https://lightning.ai/docs/pytorch/stable/data/datamodule.html#setup
+        """
+        logger = logging.getLogger("lightning.pytorch")
+        logger.info("Creating dataset")
+
+        generator = torch.manual_seed(self.hparams.dataset_seed)
+
+        # Sampling from GMM priors
         if self.hparams.sanity_check:
             n_clusters = 3
         else:
@@ -89,7 +104,8 @@ class DiffusionLightningModule(L.LightningModule):
             )
 
         if self.hparams.sanity_check:
-            self.means = [torch.tensor([-2., 2.]), torch.tensor([2., 2.]), torch.tensor([0., -2.])]
+            means = [torch.tensor([[-3., 3.]]), torch.tensor([[3., 3.]]), torch.tensor([[0., -3.]])]
+            self.means = torch.cat(means)
         else:
             # each cluster mean should be separated by cluster_separation from
             # every other cluster mean
@@ -110,14 +126,14 @@ class DiffusionLightningModule(L.LightningModule):
 
         dims = self.means[0].shape[0]
         if self.hparams.sanity_check:
-            covs = [torch.eye(dims) * 0.5 for _ in range(n_clusters)]
+            covs = torch.cat([torch.eye(dims).unsqueeze(0) * 0.5 for _ in range(n_clusters)])
         else:
             stddevs = gmm_stddev_prior(
                 n_clusters=n_clusters,
                 stddev_concentration=2.,
                 stddev_rate=2.,
             )
-            covs = [torch.eye(dims) * stddev for stddev in stddevs]
+            covs = torch.cat([(torch.eye(dims) * stddev).unsqueeze(0) for stddev in stddevs])
 
         if self.hparams.sanity_check:
             mixture_probs = torch.tensor([1 / n_clusters for _ in range(n_clusters)])
@@ -127,184 +143,362 @@ class DiffusionLightningModule(L.LightningModule):
                 n_clusters,
             )
 
-        print(f"no. of clusters: {n_clusters}")
-        print(f"means: {self.means}")
-        print(f"covs:\n{covs}")
-        print(f"mixture probs: {mixture_probs}")
+        logger.debug(f"no. of clusters: {n_clusters}")
+        logger.debug(f"means: {self.means}")
+        logger.debug(f"covs:\n{covs}")
+        logger.debug(f"mixture probs: {mixture_probs}")
 
-        self.data_gen_process = GMM(
+        # Sample the GMM to generate dataset
+        self.gmm = GMM(
             self.means,
             covs,
             mixture_probs,
         )
-        data, mixtures = self.data_gen_process.samples(self.hparams.dataset_size)
-        data = data.unsqueeze(1)
-        self._data_df = pd.concat([pd.DataFrame(x, columns=["x", "y"]) for x in data])
+        samples = self.gmm.samples(self.hparams.dataset_size)
+        data = samples.samples
+        mixtures = samples.mixtures
 
-        image_name = kde_plot_2d(
-            data.squeeze(1),
-            50,
-            (self.center_box[0] - 2, self.center_box[1] + 2),
-            [m.tolist() for m in self.means],
+        # Plot GMM to visualise
+        visualise_gmm(
+            data,
+            self.center_box,
+            self.means,
             os.path.join(self.hparams.folder, "data"),
+            "pdf",
         )
-        self.logger.experiment.add_image("Data", (np.array(Image.open(image_name).convert("RGB")) * 255).astype(np.uint8), dataformats="HWC")
 
         # Scaling data for VP-SDE
-        self.data = self._scaling(data)
+        # TODO: Implement MinMaxScaler in pytorch
+        self.scaler = MinMaxScaler((-1, 1))
+        data = torch.from_numpy(self.scaler.fit_transform(data)).unsqueeze(1).float()
 
         # Conditioning the DDPM on the GMM cluster means = mode
         conditions = torch.cat([
-            self.data_gen_process.get_mixture_parameters(mixture)[0].unsqueeze(0)
+            self.gmm.get_mixture_parameters(mixture).mean.unsqueeze(0)
             for mixture in mixtures
-        ])
-        conditions = conditions.unsqueeze(2)
+        ]).unsqueeze(2)
 
-        self.dataset = StackDataset(data=TensorDataset(self.data), conditions=TensorDataset(conditions))
+        # Create dataset to be used in prepare_data
+        dataset = StackDataset(data=TensorDataset(data), conditions=TensorDataset(conditions))
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, [0.5, 0.1, 0.4], generator)
 
-    def _scaling(self, data):
-        self._data_min = data.min(axis=0).values
-        self._data_max = data.max(axis=0).values
-        _data_std = (data - self._data_min) / (self._data_max - self._data_min)
-        data = _data_std * 2 - 1
-        return data
-    
-    def _inverse(self, data):
-        return 0.5 * (data + 1) * (self._data_max - self._data_min) + self._data_min
-
-    def _inverse_dim(self, data, i):
-        return 0.5 * (data + 1) * (self._data_max[0, i] - self._data_min[0, i]) + self._data_min[0, i]
-
-    def train_dataloader(self):
+    def train_dataloader(self) -> DataLoader:
         return DataLoader(
-            dataset=self.dataset,
+            dataset=self.train_dataset,
             batch_size=2048,
             shuffle=True,
-            num_workers=1,
         )
 
-    def val_dataloader(self):
-        # TODO: Include actual val dataset
+    def val_dataloader(self) -> DataLoader:
         return DataLoader(
-            dataset=self.dataset,
-            batch_size=128,
-            shuffle=True,
-            num_workers=1,
+            dataset=self.val_dataset,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
         )
+
+    def test_dataloader(self) -> DataLoader:
+        return DataLoader(
+            dataset=self.test_dataset,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+        )
+
+    def _calculate_nll(
+        self,
+        diffusion: Diffusion,
+        noise: torch.FloatTensor,
+        conditions: Optional[torch.FloatTensor],
+        guidance_scale: float,
+        generator: torch.Generator,
+        deterministic: bool,
+    ) -> torch.FloatTensor:
+        recon = diffusion.sample(
+            noise,
+            conditions,
+            guidance_scale=guidance_scale,
+            deterministic=deterministic,
+            timesteps="sample",
+            generator=generator,
+            disable_progress_bar=True,
+        )
+        recon = recon.detach().cpu().squeeze(1).numpy()
+        recon = self.scaler.inverse_transform(recon)
+        recon = torch.from_numpy(recon).unsqueeze(1)
+        recon_nll = -self.gmm.log_likelihood(recon)
+        recon_nll = recon_nll.mean()
+        return recon_nll
+
+    def _calculate_reconstruction(
+        self,
+        diffusion: Diffusion,
+        data: torch.FloatTensor,
+        noise: torch.FloatTensor,
+        conditions: Optional[torch.FloatTensor],
+        guidance_scale: float,
+        generator: torch.Generator,
+        deterministic: bool,
+    ) -> torch.FloatTensor:
+        recon = diffusion.sample(
+            noise,
+            conditions,
+            guidance_scale=guidance_scale,
+            deterministic=deterministic,
+            timesteps="sample",
+            generator=generator,
+            disable_progress_bar=True,
+        )
+        recon = recon.detach().cpu().squeeze(1).numpy()
+        recon = self.scaler.inverse_transform(recon)
+        recon = torch.from_numpy(recon).unsqueeze(1).to(self.device)
+        mse = F.mse_loss(data, recon)
+        return mse
+
+    def _calculate_metrics_guidance(
+        self,
+        data: torch.FloatTensor,
+        conditions: torch.FloatTensor,
+        generator: torch.Generator,
+        inversion: bool,
+        prefix: str,
+    ) -> Dict[str, torch.FloatTensor]:
+        # TODO: Include KL and Wasserstein distance
+        diffusion = self._get_diffusion()
+        # DDIM inversion
+        if inversion:
+            noise = diffusion.ddim_inversion(data, conditions, timesteps="sample", disable_progress_bar=True)
+        else:
+            noise = data
+        # Reconstruction
+        recon_nll_ddpm = self._calculate_nll(diffusion, noise, conditions, 1.0, generator, False)
+        recon_mse_ddpm = self._calculate_reconstruction(diffusion, data, noise, conditions, 1.0, generator, False)
+        recon_nll_ddim = self._calculate_nll(diffusion, noise, conditions, 1.0, generator, True)
+        recon_mse_ddim = self._calculate_reconstruction(diffusion, data, noise, conditions, 1.0, generator, True)
+        # Guided sampling with DDPM
+        guided_nll_45_ddpm = self._calculate_nll(diffusion, noise, conditions, 4.5, generator, False)
+        guided_nll_75_ddpm = self._calculate_nll(diffusion, noise, conditions, 7.5, generator, False)
+        # Guided sampling with DDIM
+        guided_nll_45_ddim = self._calculate_nll(diffusion, noise, conditions, 4.5, generator, True)
+        guided_nll_75_ddim = self._calculate_nll(diffusion, noise, conditions, 7.5, generator, True)
+        # Metrics dict
+        return {
+            f"{prefix} / DDIM Sampling / NLL / w = 1.0 (recon)": recon_nll_ddim,
+            f"{prefix} / DDIM Sampling / MSE / w = 1.0 (recon)": recon_mse_ddim,
+            f"{prefix} / DDIM Sampling / NLL / w = 4.5": guided_nll_45_ddim,
+            f"{prefix} / DDIM Sampling / NLL / w = 7.5": guided_nll_75_ddim,
+            f"{prefix} / DDPM Sampling / NLL / w = 1.0 (recon)": recon_nll_ddpm,
+            f"{prefix} / DDPM Sampling / MSE / w = 1.0 (recon)": recon_mse_ddpm,
+            f"{prefix} / DDPM Sampling / NLL / w = 4.5": guided_nll_45_ddpm,
+            f"{prefix} / DDPM Sampling / NLL / w = 7.5": guided_nll_75_ddpm,
+        }
     
-    def test_dataloader(self):
-        # TODO: Include actual test dataset
-        return DataLoader(
-            dataset=self.dataset,
-            batch_size=128,
-            shuffle=True,
-            num_workers=1,
-        )
-
     def training_step(self, batch, batch_idx):
         data = batch["data"][0]
         conditions = batch["conditions"][0]
         batch_size = data.shape[0]
 
+        # Training model
         timesteps = torch.randint(0, self.hparams.train_timesteps, (batch_size,)).to(self.device).long()
         noise = torch.randn_like(data).to(self.device)
-        conditions = None if torch.rand(1) < self.hparams.uncond_prob else conditions
+        training_conditions = None if torch.rand(1) < self.hparams.uncond_prob else conditions
 
         diffusion = self._get_diffusion()
         noisy_data = diffusion.add_noise(data, noise, timesteps)
-        noise_pred = diffusion.noise_pred(noisy_data, timesteps, conditions)
+        noise_pred = diffusion.noise_pred(noisy_data, timesteps, training_conditions)
 
         loss = F.l1_loss(noise, noise_pred)
+
+        # Training metrics
+        # TODO: log at same intervals as validation
+        if self.current_epoch % 100 == 0:
+            generator = get_generator(self.hparams.dataset_seed, self.device)
+            unguided_metrics = self._calculate_metrics_guidance(noise, None, generator, inversion=False, prefix="Unconditional")
+            guidance_metrics = self._calculate_metrics_guidance(noise, conditions, generator, inversion=False, prefix="Guidance")
+            inversion_guidance_metrics = self._calculate_metrics_guidance(data, conditions, generator, inversion=True, prefix="DDIM Inversion + Guidance")
+            metrics = {**unguided_metrics, **guidance_metrics, **inversion_guidance_metrics}
+            metrics = {f"Train / {name}": metric for name, metric in metrics.items()}
+            self.log_dict(metrics, on_epoch=True, on_step=False)
+
         return loss
     
     def validation_step(self, batch, batch_idx):
-        return
+        data = batch["data"][0]
+        conditions = batch["conditions"][0]
 
-    def on_validation_epoch_end(self):
-        diffusion = self._get_diffusion()
-
-        def _unconditional_likelihoods(deterministic, noisy_data):
-            x_uncond = diffusion.sample(noisy_data, deterministic=deterministic)
-            samples = self._inverse(x_uncond.cpu())
-            nll = -self.data_gen_process.log_likelihood(samples)
-            return nll
-
-        # Train nll
-        generator = torch.cuda.manual_seed(1) if "cuda" in str(self.device) else torch.manual_seed(1)
-        train_noise = torch.randn(self.data.shape, generator=generator, device=self.device)
-        timestep = torch.full((self.data.shape[0],), 0, dtype=torch.long, device=self.device)
-        noisy_train_data = diffusion.add_noise(self.data.to(self.device), train_noise, timestep)
-
-        ddim_nll_train = _unconditional_likelihoods(True, noisy_train_data)
-        ddpm_nll_train = _unconditional_likelihoods(False, noisy_train_data)
-
-        # Validation nll
-        n_samples = min(10000, self.data.shape[0])
-        generator = torch.cuda.manual_seed(1) if "cuda" in str(self.device) else torch.manual_seed(1)
-        noisy_val_data = torch.randn(self.data[:n_samples].shape, generator=generator, device=self.device)
-
-        ddim_nll_val = _unconditional_likelihoods(True, noisy_val_data)
-        ddpm_nll_val = _unconditional_likelihoods(False, noisy_val_data)
-
-        self.log_dict({
-            "train/ddim_nll": ddim_nll_train,
-            "train/ddpm_nll": ddpm_nll_train,
-            "val/ddim_nll": ddim_nll_val,
-            "val/ddpm_nll": ddpm_nll_val,
-        })
+        generator = get_generator(self.hparams.dataset_seed, self.device)
+        noise = torch.randn(data.shape, generator=generator, device=self.device)
+        unguided_metrics = self._calculate_metrics_guidance(noise, None, generator, inversion=False, prefix="Unconditional")
+        guidance_metrics = self._calculate_metrics_guidance(noise, conditions, generator, inversion=False, prefix="Guidance")
+        inversion_guidance_metrics = self._calculate_metrics_guidance(data, conditions, generator, inversion=True, prefix="DDIM Inversion + Guidance")
+        metrics = {**unguided_metrics, **guidance_metrics, **inversion_guidance_metrics}
+        metrics = {f"Val / {name}": metric for name, metric in metrics.items()}
+        self.log_dict(metrics, on_epoch=True, on_step=False)
 
     def test_step(self, batch, batch_idx):
         return
 
     def on_test_epoch_end(self):
+        data = torch.cat([x["data"][0] for x in self.test_dataloader()]).to(self.device)
+        conditions = torch.cat([x["conditions"][0] for x in self.test_dataloader()]).to(self.device)
+        conditions_idx = []
+        for c in conditions:
+            for i, mean in enumerate(self.gmm.means):
+                if (c.cpu().flatten() == mean).all():
+                    conditions_idx.append(i)
+                    break
+        conditions_idx = torch.tensor(conditions_idx)
+
+        # TODO: kde plots
         diffusion = self._get_diffusion()
 
-        # Validation example for visualisation
-        n_samples = min(10000, self.data.shape[0])
-        generator = torch.cuda.manual_seed(0) if "cuda" in str(self.device) else torch.manual_seed(0)
-        val_noise_for_vis = torch.randn(self.data[:n_samples].shape, generator=generator, device=self.device)
+        # Random noise - different to noise from val step
+        generator = get_generator(0, self.device)
+        n_samples = data.shape[0]
+        random_noise = torch.randn(data.shape, generator=generator, device=self.device)
 
-        def _unconditional_trajectories(deterministic, range_skip):
-            title = "DDIM" if deterministic else "DDPM"
-            trajectory_callback = TrajectoryCallback()
-            callbacks = [trajectory_callback]
-            x_uncond = diffusion.sample(val_noise_for_vis, deterministic=deterministic, callbacks=callbacks)
+        # DDIM Inversion
+        ddim_inversion_callback = TrajectoryCallback()
+        ddim_inversion = diffusion.ddim_inversion(data, conditions, timesteps="sample", callbacks=[ddim_inversion_callback])
+        ddim_guided_x = ddim_inversion_callback.sample(n_samples, dim=0)
+        ddim_guided_y = ddim_inversion_callback.sample(n_samples, dim=1)
 
-            # Trajectories
-            timesteps = self.hparams.sample_timesteps if deterministic else self.hparams.train_timesteps
-            x_timesteps, x_trajs = trajectory_callback.sample(n=min(1000, self.data.shape[0]), dim=0)
-            y_timesteps, y_trajs = trajectory_callback.sample(n=min(1000, self.data.shape[0]), dim=1)
-            _len = len(x_timesteps)
-            idxs = list(range(0, _len, range_skip))
-            if idxs[-1] != _len - 1:
-                idxs += [_len - 1]
+        def _trajectories_plot(deterministic, plot_name, conditions, guidance_scale = 0.0, inverse = False):
+            sample_callback = TrajectoryCallback()
+            samples = diffusion.sample(
+                ddim_inversion if inverse else random_noise,
+                conditions=conditions,
+                deterministic=deterministic,
+                timesteps="sample",
+                guidance_scale=guidance_scale,
+                generator=generator,
+                callbacks=[sample_callback],
+                disable_progress_bar=True,
+            )
+            predictions = self.gmm.predict(samples.cpu())
 
-            # TODO: Scale the y-axis on the plot but not the data
-            x_trajs = [[x_traj[i] for i in idxs] for x_traj in x_trajs]
-            y_trajs = [[y_traj[i] for i in idxs] for y_traj in y_trajs]
-            x_timesteps = [x_timesteps[i] for i in idxs]
-            y_timesteps = [y_timesteps[i] for i in idxs]
+            sample_x = sample_callback.sample(n_samples, dim=0)
+            sample_y = sample_callback.sample(n_samples, dim=1)
 
-            lims = (-3, 3)
-            image_name_x = trajectory_plot_1d(x_timesteps, x_trajs, timesteps, lims, 4, os.path.join(self.hparams.folder, f"unconditional_trajectory_x_{title}_{self.current_epoch}"), 0.2, 0.2)
-            image_name_y = trajectory_plot_1d(y_timesteps, y_trajs, timesteps, lims, 4, os.path.join(self.hparams.folder, f"unconditional_trajectory_y_{title}_{self.current_epoch}"), 0.2, 0.2)
+            if inverse:
+                plotter_x = partial(
+                    trajectory_plot_1d_with_inverse,
+                    trajectories=[sample.numpy().flatten() for sample in sample_x],
+                    inverse_trajectories=[sample.numpy().flatten() for sample in ddim_guided_x],
+                    save_path=os.path.join(self.hparams.folder, f"{plot_name}_x"),
+                    true_data=data[:, 0, 0].cpu().numpy(),
+                )
+                plotter_y = partial(
+                    trajectory_plot_1d_with_inverse,
+                    trajectories=[sample.numpy().flatten() for sample in sample_y],
+                    inverse_trajectories=[sample.numpy().flatten() for sample in ddim_guided_y],
+                    save_path=os.path.join(self.hparams.folder, f"{plot_name}_y"),
+                    true_data=data[:, 0, 1].cpu().numpy(),
+                )
+            else:
+                plotter_x = partial(
+                    trajectory_plot_1d,
+                    trajectories=[sample.numpy() for sample in sample_x],
+                    save_path=os.path.join(self.hparams.folder, f"{plot_name}_x"),
+                    true_data=data[:, 0, 0].cpu().numpy(),
+                )
+                plotter_y = partial(
+                    trajectory_plot_1d,
+                    trajectories=[sample.numpy() for sample in sample_y],
+                    save_path=os.path.join(self.hparams.folder, f"{plot_name}_y"),
+                    true_data=data[:, 0, 1].cpu().numpy(),
+                )
 
-            self.logger.experiment.add_image("test/x_trajectory", (np.array(Image.open(image_name_x).convert("RGB")) * 255).astype(np.uint8), dataformats="HWC")
-            self.logger.experiment.add_image("test/y_trajectory", (np.array(Image.open(image_name_y).convert("RGB")) * 255).astype(np.uint8), dataformats="HWC")
+            kwargs = dict(
+                T=self.hparams.sample_timesteps,
+                y_lims=(-2, 2),
+                kde_bandwidth=0.1,
+                output_type="pdf",
+                fast=True,
+            )
+            plotter_x(**kwargs)
+            plotter_y(**kwargs)
 
-        def _kde_plots():
-            ddim = diffusion.sample(val_noise_for_vis, deterministic=True)
-            ddim = self._inverse(ddim.cpu())
-            ddpm = diffusion.sample(val_noise_for_vis, deterministic=False)
-            ddpm = self._inverse(ddpm.cpu())
-            original = self._inverse(self.data)
-            lims = (self.center_box[0] - 2, self.center_box[1] + 2)
-            image_name = kde_plot_2d_compare(ddim.squeeze(1), ddpm.squeeze(1), original.squeeze(1), lims, lims, os.path.join(self.hparams.folder, f"unconditional_kde_{self.current_epoch}"))
-            self.logger.experiment.add_image("test/kde", (np.array(Image.open(image_name).convert("RGB")) * 255).astype(np.uint8), dataformats="HWC")
+            return samples, predictions
 
-        # _unconditional_trajectories(True, 1)
-        # _unconditional_trajectories(False, 10)
-        _kde_plots()
+        # Guidance scales for tests 
+        guidance_scales = [1.0, 4.5, 7.5]
+
+        def _sampling(plot_name_prefix, axes, deterministic, inverse):
+            for j, w in enumerate(guidance_scales):
+                if inverse:
+                    acc_matrix = torch.empty((self.means.shape[0], self.means.shape[0]))
+                else:
+                    classification_metric = MulticlassConfusionMatrix(
+                        num_classes=len(self.means),
+                        normalize="true",
+                    )
+                all_targets = []
+                all_preds = []
+                for i, mean in enumerate(self.means):
+                    _mean = mean.unsqueeze(0).repeat((n_samples, 1)).unsqueeze(-1).to(self.device)
+                    samples, preds = _trajectories_plot(deterministic, f"{plot_name_prefix}_{i}_{w}", _mean, w, inverse)
+                    if inverse:
+                        # TODO: Use plot_confusion_matrix from torchmetric
+                        for k, mean in enumerate(self.means):
+                            original_class_mask = conditions_idx == k
+                            _preds = preds[original_class_mask]
+                            acc = (_preds == i).sum() / _preds.shape[0]
+                            acc_matrix[k, i] = acc
+                    else:
+                        classification_metric.update(
+                            torch.tensor([i for _ in range(preds.shape[0])]),
+                            torch.tensor(preds.flatten().tolist()),
+                        )
+                if inverse:
+                    plot_confusion_matrix(acc_matrix, axes[j])
+                else:
+                    classification_metric.plot(ax=axes[j])
+
+        def _confusion_matrix_subplots():
+            return plt.subplots(
+                nrows=2,
+                ncols=len(guidance_scales),
+                gridspec_kw={
+                    "wspace": 0.05, "width_ratios": [1 for _ in range(len(guidance_scales))],
+                    "hspace": 0.01, "height_ratios": [1, 1],
+                },
+            )
+
+        def _confusion_matrix_axes_formatting(axes):
+            for i, w in enumerate(guidance_scales):
+                axes[0, i].set_title(rf"$\omega = {w}$")
+            for ax in axes.flatten():
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+            for ax in axes[0, :].flatten():
+                ax.xaxis.set_tick_params(labelbottom=False)
+                ax.set_xticks([])
+            for ax in axes[:, 1:].flatten():
+                ax.yaxis.set_tick_params(labelleft=False)
+                ax.set_yticks([])
+            axes[0, 0].set_ylabel("DDIM")
+            axes[1, 0].set_ylabel("DDPM")
+
+        # Confusion matrices for guided generations from random noise (below)
+        fig, axes = _confusion_matrix_subplots() 
+        _sampling("guided_sample_ddpm", axes[0, :], False, False)
+        _sampling("guided_sample_ddim", axes[1, :], True, False)
+        _confusion_matrix_axes_formatting(axes)
+        fig.savefig(
+            os.path.join(self.hparams.folder, "guided_confusion_matrix.pdf"),
+            bbox_inches="tight",
+        )
+
+        # Confusion matrices for DDIM inversion + guided generations (below)
+        fig_edit, axes_edit = _confusion_matrix_subplots() 
+        _sampling("guided_recon_ddpm", axes_edit[0, :], False, True)
+        _sampling("guided_recon_ddim", axes_edit[1, :], True, True)
+        _confusion_matrix_axes_formatting(axes_edit)
+        fig_edit.savefig(
+            os.path.join(self.hparams.folder, "edit_confusion_matrix.pdf"),
+            bbox_inches="tight",
+        )
+
+        # TODO: KDE plots for edits and cfg guidance
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.unet.parameters(), lr=1e-5)
@@ -313,14 +507,11 @@ class DiffusionLightningModule(L.LightningModule):
 def main():
     folder = "experiment_samples"
 
-    # TODO: run experiments where we vary all aspects of the dataset, including number of cluster
     for seed in range(0, 30):
         seed_everything(seed)
 
         subfolder = f"{folder}/{seed}"
         os.makedirs(subfolder, exist_ok=True)
-
-        tb_logger = TensorBoardLogger(save_dir=folder, version=seed)
 
         diffusion = DiffusionLightningModule(
             dim=20,
@@ -334,15 +525,23 @@ def main():
             max_clusters=7,
             gmm_categories_concentration=5,
             center_box=10.,
-            cluster_separation=3.,
+            cluster_separation=4.,
             folder=subfolder,
             sanity_check=False,
         )
+
+        tb_logger = TensorBoardLogger(save_dir=folder, version=seed)
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=subfolder,
+            filename=f"model_{seed}",
+        )
         trainer = Trainer(
             accelerator="gpu",
-            max_epochs=2000,
+            max_epochs=1000,
             check_val_every_n_epoch=100,
             logger=tb_logger,
+            callbacks=[checkpoint_callback],
         )
+
         trainer.fit(diffusion)
         trainer.test(diffusion)

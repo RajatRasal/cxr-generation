@@ -1,7 +1,6 @@
 import abc
-import random
 from abc import abstractmethod
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 
@@ -9,7 +8,12 @@ import torch
 class DiffusionCallback(abc.ABC):
 
     @abstractmethod
-    def __call__(self, x: torch.FloatTensor, timestep: torch.LongTensor, eps: torch.FloatTensor):
+    def __call__(
+        self,
+        x: Optional[torch.FloatTensor],
+        timestep: Optional[torch.LongTensor],
+        eps: Optional[torch.FloatTensor],
+    ):
         raise NotImplementedError()
 
     
@@ -18,19 +22,21 @@ class TrajectoryCallback(DiffusionCallback):
     def __init__(self):
         self.timesteps = []
 
-    def __call__(self, x: torch.FloatTensor, timestep: torch.LongTensor, eps: torch.FloatTensor):
+    def __call__(
+        self,
+        x: Optional[torch.FloatTensor],
+        timestep: Optional[torch.LongTensor],
+        eps: Optional[torch.FloatTensor],
+    ):
         self.timesteps.append(x.cpu())
 
-    def sample(self, n: int, dim: int, seed: int = 0) -> Tuple[List[int], List[List[float]]]:
+    def sample(self, n: int, dim: int) -> List[torch.FloatTensor]:
         """
-        Plot n randomly chosen trajectories
+        Plot the first n trajectories
         """
         trajectories = []
         batch_size = len(self.timesteps[0])
-        random.seed(seed)
-        for i in random.sample(list(range(batch_size)), k=n):
-            trajectories.append([
-                timestep[i, :, dim].item()
-                for timestep in self.timesteps
-            ])
-        return list(range(len(trajectories[0]))), trajectories
+        for i in range(n):
+            trajectory = [timestep[i, :, dim] for timestep in self.timesteps]
+            trajectories.append(torch.cat(trajectory))
+        return trajectories

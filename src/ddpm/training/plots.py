@@ -1,9 +1,12 @@
 import random
+from typing import Dict, Literal, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import torch
+from matplotlib.axes import Axes
 from sklearn.neighbors import KernelDensity
 
 
@@ -12,11 +15,152 @@ def softmax(x: np.array):
     return np.exp(x) / np.sum(np.exp(x), axis=0)
 
 
-def trajectory_plot_1d(timesteps, trajectories, T: int, y_lims, n_trajectories: int, save_path: str, kde_bandwidth_T: float, kde_bandwidth_0: float, output_type: str = "png"):
-    # plot forward diffusion
-    # TODO: Install cm-super so that latex can be used in matplotlib
-    # plt.rc("text", usetex=True)
-    # plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
+def _density_plot_1d(
+    ax: Axes,
+    data: np.ndarray,
+    y_lims: Tuple[float, float],
+    linspace: int,
+    title: str,
+    y_label: Optional[str],
+    y_ticks: Literal["left", "right", "none"],
+    kde_bandwidth: float,
+    true_data: Optional[np.ndarray] = None, 
+):
+    # TODO: overlay KDEs at the end with true data
+    # Sampling intervals
+    _ys = np.linspace(*y_lims, linspace)
+    ax.set_ylim(*y_lims)
+
+    # Background colour
+    ax.set_facecolor("white")
+
+    # Titles and labels
+    ax.set_title(title)
+    if y_label is not None:
+        ax.set_ylabel(y_label, rotation=0)
+    ax.set_xticks([])
+
+    # Location of ticks
+    if y_ticks == "left":
+        pass
+    elif y_ticks == "right":
+        ax.tick_params(labelleft=False)
+        ax.tick_params(labelleft=True)
+        ax.yaxis.set_ticks_position("right")
+    elif y_ticks == "none":
+        ax.tick_params(labelleft=False)
+        ax.yaxis.set_ticks_position("none")
+    else:
+        raise ValueError(f"{y_ticks} must be 'left', 'right', or 'none'")
+
+    # Remove the first and last label
+    if y_ticks != "none":
+        y_labels = ax.get_yticklabels()
+        y_labels[0].set_text("")
+        y_labels[-1].set_text("")
+        ax.set_yticklabels(y_labels)
+
+    # Black border for the kde plot
+    for spine_name in ["bottom", "top", "right", "left"]:
+        ax.spines[spine_name].set_color("black")
+
+    # Fit a KDE to data
+    kde = KernelDensity(bandwidth=kde_bandwidth)
+    kde.fit(data[:, None])
+    density = kde.score_samples(_ys[:, None])
+    # Plot KDE using softmax to create more contrast between peaks and troughs
+    ax.plot(softmax(density), _ys, color="black", label="Sample")
+
+    if true_data is not None:
+        # Fit a KDE to the true trajectories
+        kde = KernelDensity(bandwidth=kde_bandwidth)
+        kde.fit(true_data[:, None])
+        true_density = kde.score_samples(_ys[:, None])
+        ax.plot(softmax(true_density), _ys, color="grey", ls="--", label="True")
+
+
+def _trajectory_densities(
+    ax: Axes,
+    trajectories: np.ndarray,
+    title: str,
+    forward: bool,
+    y_lims: Tuple[float, float],
+    fast: bool = True,
+):
+    # Set background colour for area not covered by KDE
+    if fast:
+        ax.set_facecolor("white")
+    else:
+        cmap = "magma"
+        colour_palette = sns.mpl_palette(cmap, n_colors=100)
+        ax.set_facecolor(colour_palette[0])
+
+    # title
+    ax.set_title(title)
+
+    # setting y-axis direction
+    ax.set_ylim(*y_lims)
+
+    # setting axis direction
+    T = trajectories[0].shape[0]
+    timesteps = np.arange(0, T)
+    if forward:
+        ax.set_xlim(0, T)
+    else:
+        timesteps = timesteps[::-1]
+        ax.set_xlim(T, 0)
+    x_labels = ax.get_xticklabels()[:-1]
+    ax.set_xticklabels(x_labels)
+
+    # KDEplot normalised per timestep
+    if fast:
+        for i, traj in enumerate(trajectories[:500]):
+            ax.plot(timesteps, traj, color="#3f2b4f", lw=0.5)
+    else:
+        data = [
+            (t - 1, x)
+            for traj in trajectories
+            for t, x in zip(timesteps, traj)
+        ]
+        data = random.sample(data, k=1000)
+        df = pd.DataFrame(data, columns=["t", "x"])
+        sns.kdeplot(
+            data=df,
+            x="t", y="x",
+            ax=ax,
+            fill=True,
+            thresh=0,
+            levels=50,
+            cmap=cmap,
+            common_norm=False,
+        )
+
+    # No labels or ticks
+    ax.set_ylabel("")
+    ax.set_xlabel("")
+    ax.tick_params(labelleft=False)
+    ax.yaxis.set_ticks_position("none")
+
+    # Trajectories
+    if fast:
+        for i, traj in enumerate(trajectories[:5]):
+            ax.plot(timesteps, traj, ls="-", color="white", lw=1.0)
+    else:
+        traj_colour_palette = sns.mpl_palette("Paired", n_colors=10)
+        for i, traj in enumerate(trajectories[:5]):
+            ax.plot(timesteps, traj, ls="--", color=traj_colour_palette[i], lw=1.0)
+
+
+def trajectory_plot_1d(
+    trajectories: List[np.ndarray],
+    T: int,
+    y_lims: Tuple[float, float],
+    save_path: str,
+    kde_bandwidth: float,
+    output_type: str,
+    true_data: Optional[np.ndarray] = None,
+    fast: bool = True,
+):
     with plt.style.context("bmh"):
         fig, axes = plt.subplots(
             nrows=1,
@@ -24,73 +168,50 @@ def trajectory_plot_1d(timesteps, trajectories, T: int, y_lims, n_trajectories: 
             figsize=(8, 3),
             gridspec_kw={"wspace": 0.05, "width_ratios": [1, 10, 1]},
         )
-        fig.set_facecolor("white")
 
         # Axes
         init_density_ax = axes[0]
         traj_ax = axes[1]
         final_density_ax = axes[2]
 
-        # Trajectory density
-        # TODO: Draw arrows in latex using matplotlib
-        traj_ax.set_title(r"$\longleftarrow p_t(x) \longrightarrow$")
-        traj_ax.set_xlim(T, 0)
-        traj_ax.set_ylim(*y_lims)
-        traj_ax.tick_params(labelleft=False)
-        traj_ax.yaxis.set_ticks_position("none")
-        dfs = pd.concat([
-            pd.DataFrame(np.array([timesteps, traj]).T, columns=["t", "x"])
-            for traj in trajectories
-        ])
-        colour_palette = sns.mpl_palette("magma", n_colors=100)
-        traj_ax.set_facecolor(colour_palette[0])
-        # Some good visualisations in this one: https://www.imperial.ac.uk/media/imperial-college/faculty-of-engineering/computing/public/2223-ug-projects/Investigating-numerical-methods-in-score-based-models.pdf
         # TODO: We fit a KDE plot to each timestep, currently the KDE plot is normalised across time
-        sns.kdeplot(data=dfs, x="t", y="x", ax=traj_ax, fill=True, thresh=0, levels=100, cmap="magma")
-        # sns.displot(data=dfs, x="t", y="x", hue="x", ax=traj_ax, kind="kde", thresh=0, levels=100, cmap="magma", common_norm=False, fill=True)
-        traj_ax.set_ylabel("")
-        traj_ax.set_xlabel("")
+        title = r"$\longrightarrow \text{Reverse process} \longrightarrow$"
+        init = 0
+        final = -1
+        init_density_title = "$z_T$"
+        final_density_title = "$z_0$"
 
-        # Trajectory plot
-        for traj in trajectories[:n_trajectories]:
-            traj_ax.plot(timesteps, traj)
+        _trajectory_densities(
+            traj_ax,
+            trajectories,
+            title,
+            forward=True,
+            y_lims=y_lims,
+            fast=fast,
+        )
 
-        _ys = np.linspace(*y_lims, 100)
-        # Init density plot
-        init_density_ax.set_facecolor("white")
-        init_density_ax.set_title("$p_T(x)$")
-        init_density_ax.set_ylim(*y_lims)
-        init_density_ax.set_ylabel("$x$", rotation=0)
-        init_density_ax.set_xticks([])
-        init_density_ax_y_labels = init_density_ax.get_yticklabels()
-        init_density_ax_y_labels[0].set_text("")
-        init_density_ax_y_labels[-1].set_text("")
-        init_density_ax.set_yticklabels(init_density_ax_y_labels)
-        for spine in ["bottom", "top", "right", "left"]:
-            init_density_ax.spines[spine].set_color("black")
-        init_kde = KernelDensity(bandwidth=kde_bandwidth_T)
-        init_kde.fit(np.array([traj[0] for traj in trajectories])[:, None])
-        init_density = init_kde.score_samples(_ys[:, None])
-        init_density_ax.plot(softmax(init_density), _ys, color="black")
-
-        # Final density plot
-        final_density_ax.set_facecolor("white")
-        final_density_ax.set_title("$p_0(x)$")
-        final_density_ax.set_ylim(*y_lims)
-        final_density_ax.set_xticks([])
-        final_density_ax.tick_params(labelleft=False)
-        final_density_ax.tick_params(labelright=True)
-        final_density_ax.yaxis.set_ticks_position("right")
-        final_density_ax_y_labels = final_density_ax.get_yticklabels()
-        final_density_ax_y_labels[0].set_text("")
-        final_density_ax_y_labels[-1].set_text("")
-        final_density_ax.set_yticklabels(final_density_ax_y_labels)
-        for spine in ["bottom", "top", "right", "left"]:
-            final_density_ax.spines[spine].set_color("black")
-        final_kde = KernelDensity(bandwidth=kde_bandwidth_0)
-        final_kde.fit(np.array([traj[-1] for traj in trajectories])[:, None])
-        final_density = final_kde.score_samples(_ys[:, None])
-        final_density_ax.plot(softmax(final_density), _ys, color="black")
+        # Beginning and end KDE plots 
+        _density_plot_1d(
+            ax=init_density_ax,
+            data=np.array([traj[init] for traj in trajectories]),
+            y_lims=y_lims,
+            linspace=100,
+            title=init_density_title,
+            y_label="$x$",
+            y_ticks="left",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=final_density_ax,
+            data=np.array([traj[final] for traj in trajectories]),
+            y_lims=y_lims,
+            linspace=100,
+            title=final_density_title,
+            y_label=None,
+            y_ticks="right",
+            kde_bandwidth=kde_bandwidth,
+            true_data=true_data,
+        )
 
         # Save plot
         image_name = f"{save_path}.{output_type}"
@@ -98,53 +219,123 @@ def trajectory_plot_1d(timesteps, trajectories, T: int, y_lims, n_trajectories: 
         return image_name 
 
 
-def kde_plot_2d_compare(samples_ddim, samples_ddpm, original, x_lims, y_lims, save_path: str, output_type="png"):
+def trajectory_plot_1d_with_inverse(
+    trajectories: List[np.ndarray],
+    inverse_trajectories: List[np.ndarray],
+    T: int,
+    y_lims: Tuple[float, float],
+    save_path: str,
+    kde_bandwidth: float,
+    output_type: str,
+    true_data: Optional[np.ndarray] = None,
+    fast: bool = True,
+):
     with plt.style.context("bmh"):
-        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(3, 3))
-        fig.set_facecolor("white")
-        ax.set_xlim(x_lims)
-        ax.set_ylim(y_lims)
-        ax.set_facecolor("white")
+        fig, axes = plt.subplots(
+            nrows=1,
+            ncols=5,
+            figsize=(16, 3),
+            gridspec_kw={"wspace": 0.05, "width_ratios": [1, 10, 1, 10, 1]},
+        )
 
-        original_df = pd.DataFrame(original, columns=["x", "y"])
-        samples_ddim = pd.DataFrame(samples_ddim, columns=["x", "y"])
-        samples_ddpm = pd.DataFrame(samples_ddpm, columns=["x", "y"])
+        # Axes
+        init_density_ax = axes[0]
+        inverse_traj_ax = axes[1]
+        intermediate_density_ax = axes[2]
+        traj_ax = axes[3]
+        final_density_ax = axes[4]
 
-        # TODO: Include marginals
-        sns.kdeplot(data=original_df, x="x", y="y", ax=ax, fill=True, thresh=0.2, levels=5, cmap="Reds", label="Original")
-        sns.kdeplot(data=samples_ddim, x="x", y="y", ax=ax, thresh=0.2, levels=5, cmap="Blues_r", linewidths=1, label="DDIM")
-        sns.kdeplot(data=samples_ddpm, x="x", y="y", ax=ax, thresh=0.2, levels=5, cmap="Greens_r", linewidths=1, linestyles="--", label="DDPM")
+        # TODO: We fit a KDE plot to each timestep, currently the KDE plot is normalised across time
+        title = r"$\longrightarrow \text{Classifier-Free Guidance} \longrightarrow$"
+        title_inv = r"$\longrightarrow \text{DDIM Inversion} \longrightarrow$"
+        init = 0
+        final = -1
+        init_density_title = "$z_T$"
+        final_density_title = "$z_0$"
 
-        ax.set_xlabel("")
-        ax.set_ylabel("")
+        # TODO: assertion to check final inverse and first traj
+        check = np.array([traj[final] for traj in inverse_trajectories]) == np.array([traj[init] for traj in trajectories])
+        assert all(check.tolist())
 
+        _trajectory_densities(
+            inverse_traj_ax,
+            inverse_trajectories,
+            title_inv,
+            forward=False,
+            y_lims=y_lims,
+            fast=fast,
+        )
+        _trajectory_densities(
+            traj_ax,
+            trajectories,
+            title,
+            forward=True,
+            y_lims=y_lims,
+            fast=fast,
+        )
+
+        # Beginning, intermediate and end KDE plots 
+        _density_plot_1d(
+            ax=init_density_ax,
+            data=np.array([traj[init] for traj in inverse_trajectories]),
+            y_lims=y_lims,
+            linspace=100,
+            title=final_density_title,
+            y_label="$x$",
+            y_ticks="left",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=intermediate_density_ax,
+            data=np.array([traj[init] for traj in trajectories]),
+            y_lims=y_lims,
+            linspace=100,
+            title=init_density_title,
+            y_label="",
+            y_ticks="none",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=final_density_ax,
+            data=np.array([traj[final] for traj in trajectories]),
+            y_lims=y_lims,
+            linspace=100,
+            title=final_density_title,
+            y_label=None,
+            y_ticks="right",
+            kde_bandwidth=kde_bandwidth,
+            # true_data=true_data,
+        )
+
+        # Save plot
         image_name = f"{save_path}.{output_type}"
         fig.savefig(image_name, format=output_type, bbox_inches="tight")
-
-        return image_name
-
-
-def kde_plot_2d(original, n_samples, lims, keypoints, save_path, output_type="png"):
-    with plt.style.context("bmh"):
-        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(3, 3))
-        fig.set_facecolor("white")
-        ax.set_xlim(lims)
-        ax.set_ylim(lims)
-        ax.set_facecolor("white")
-
-        original_df = pd.DataFrame(original, columns=["x", "y"])
-        sns.kdeplot(data=original_df, x="x", y="y", ax=ax, fill=True, thresh=0.2, levels=5, cmap="Reds")
-
-        samples_df = pd.DataFrame(original[random.sample(list(range(0, original.shape[0])), n_samples)], columns=["x", "y"])
-        sns.scatterplot(data=samples_df, x="x", y="y", ax=ax, marker="x", color="#017D97", s=10)
-
-        keypoints = pd.DataFrame(keypoints, columns=["x", "y"])
-        sns.scatterplot(data=keypoints, x="x", y="y", marker="o", color="#4A993A", s=15)
-
-        ax.set_xlabel("")
-        ax.set_ylabel("")
-
-        image_name = f"{save_path}.{output_type}"
-        fig.savefig(image_name, format=output_type, bbox_inches="tight")
-
         return image_name 
+
+
+def visualise_gmm(
+    original: torch.FloatTensor,
+    center_box: Tuple[float, float],
+    keypoints: torch.FloatTensor,
+    save_path: str,
+    output_type: Literal["pdf", "png"],
+):
+    with plt.style.context("bmh"):
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(3, 3))
+        fig.set_facecolor("white")
+        ax.set_xlim((center_box[0] - 2, center_box[1] + 2))
+        ax.set_ylim((center_box[0] - 2, center_box[1] + 2))
+        ax.set_facecolor("white")
+
+        original_df = pd.DataFrame(original, columns=["x", "y"])
+        sns.kdeplot(data=original_df, x="x", y="y", ax=ax, fill=True, thresh=0.2, levels=5, cmap="Purples")
+
+        for i, keypoint in enumerate(keypoints):
+            ax.scatter(keypoint[0], keypoint[1], marker="x", c="#4A993A", s=0.2, linewidths=0.2)  # "#4A993A")
+            ax.annotate(str(i), (keypoint[0] + 0.1, keypoint[1] + 0.1))
+
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+
+        image_name = f"{save_path}.{output_type}"
+        fig.savefig(image_name, format=output_type, bbox_inches="tight")

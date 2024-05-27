@@ -70,7 +70,7 @@ class DiffusionLightningModule(L.LightningModule):
             self.hparams.context_dim,
         )
         self.center_box = (-self.hparams.center_box, self.hparams.center_box)
-        self.null_token = torch.randn((2, 1), generator=get_generator(self.hparams.dataset_seed, self.device))
+        self.null_token = torch.randn((2, 1), generator=get_generator(0, "cpu"))
 
     def _get_diffusion(self) -> Diffusion:
         return Diffusion(
@@ -181,7 +181,7 @@ class DiffusionLightningModule(L.LightningModule):
 
         # Create dataset to be used in prepare_data
         dataset = StackDataset(data=TensorDataset(data), conditions=TensorDataset(conditions))
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, [0.5, 0.1, 0.4], generator)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, [0.8, 0.1, 0.1], generator)
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(

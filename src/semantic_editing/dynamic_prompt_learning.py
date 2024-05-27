@@ -363,6 +363,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             with torch.no_grad():
                 noise_pred_uncond = self.model.get_noise_pred(latent_cur, t, null_embedding)
                 noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                # TODO: Check if we need to use the generator instead of None
                 latent_cur = self.model.prev_step(noise_pred, t, latent_cur, None)
 
             # Run a noise prediction to get cross attention maps.
@@ -594,7 +595,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
                     self.null_embeddings[i].to(self.model.device),
                     timestep,
                     self.guidance_scale,
-                    )
+                )
 
         self.model.set_embeddings(original_embeddings)
         self.model.reset_attention_store()

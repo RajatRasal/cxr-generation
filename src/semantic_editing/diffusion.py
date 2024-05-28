@@ -280,7 +280,12 @@ def classifier_free_guidance_step(
         # (2, 1, mask_attn_res, mask_attn_res)
         mask = attn_maps.sum(-1).mean(1)
         # (2, 1, mask_attn_res, mask_attn_res)
-        mask = F.max_pool2d(mask, kernel_size=(2 * mask_pool_k + 1, 2 * mask_pool_k + 1), stride=(1, 1), padding=(mask_pool_k, mask_pool_k))
+        mask = F.max_pool2d(
+            mask,
+            kernel_size=(2 * mask_pool_k + 1, 2 * mask_pool_k + 1),
+            stride=(1, 1),
+            padding=(mask_pool_k, mask_pool_k),
+        )
         # (2, 1, 64, 64) <-- 64 in the case of StableDiffusion
         mask = F.interpolate(mask, size=(latent.shape[-1], latent.shape[-1]))
         mask_max = mask.max(2, keepdims=True)[0].max(3, keepdims=True)[0]

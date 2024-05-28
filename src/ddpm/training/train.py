@@ -186,7 +186,7 @@ class DiffusionLightningModule(L.LightningModule):
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             dataset=self.train_dataset,
-            batch_size=2048,
+            batch_size=self.hparams.batch_size,
             shuffle=True,
         )
 

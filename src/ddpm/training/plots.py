@@ -141,14 +141,10 @@ def _trajectory_densities(
     ax.tick_params(labelleft=False)
     ax.yaxis.set_ticks_position("none")
 
-    # Trajectories
-    if fast:
-        for i, traj in enumerate(trajectories[:5]):
-            ax.plot(timesteps, traj, ls="-", color="white", lw=1.0)
-    else:
-        traj_colour_palette = sns.mpl_palette("Paired", n_colors=10)
-        for i, traj in enumerate(trajectories[:5]):
-            ax.plot(timesteps, traj, ls="--", color=traj_colour_palette[i], lw=1.0)
+    n_colours = 5
+    traj_colour_palette = sns.mpl_palette("tab10", n_colors=n_colours)
+    for i, traj in enumerate(trajectories[:n_colours]):
+        ax.plot(timesteps, traj, ls="--", color=traj_colour_palette[i], lw=3.0)
 
 
 def trajectory_plot_1d(

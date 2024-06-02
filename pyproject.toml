@@ -5,7 +5,7 @@ description = ""
 authors = ["Rajat Rasal"]
 readme = "README.md"
 packages = [
-    { include = "dataset", from = "src" },
+    { include = "datasets", from = "src" },
     { include = "semantic_editing", from = "src" },
     { include = "ddpm", from = "src" }
 ]
@@ -17,6 +17,8 @@ laion_400m_embed = "dataset.clip:main"
 format_reports = "dataset.create_section_files:cli"
 
 experiments = "semantic_editing.experiments:main"
+
+colour_mnist = "datasets.mnist.colour:colour_mnist_with_fixed_saturation"
 
 ddpm_train = "ddpm.training.train:main"
 

@@ -30,6 +30,7 @@ class NullTokenOptimisation:
         condition: torch.FloatTensor,
         ddim_inversion_callbacks: Optional[List[DiffusionCallback]] = None,
         disable_progress_bar: bool = True,
+        generator: Optional[torch.Generator] = None,
     ):
         self.x = x
         self.condition = condition
@@ -65,7 +66,7 @@ class NullTokenOptimisation:
             latent_prev = self.latents[t].detach().to(device).requires_grad_(False)
 
             # Initialise optimiser
-            lr_scale_factor = 1. - (n_timesteps - t) / (n_timesteps * 2)
+            lr_scale_factor = 1. - (n_timesteps - t) / n_timesteps
             optimiser = torch.optim.Adam([null_token], lr=self.learning_rate * lr_scale_factor)
 
             # Null-token optimisation loop
@@ -81,13 +82,17 @@ class NullTokenOptimisation:
                 )
                 # TODO: Include generator
                 # TODO: Include next_step and prev_step interface
-                latent_prev_pred = scheduler.step(eps, t, latent_cur, generator=None).prev_sample
+                # TODO: NTO callback to track null_token, losses, timesteps
+                latent_prev_pred = scheduler.step(eps, t, latent_cur, generator=generator).prev_sample
                 # Compute loss between predicted latent and true latent from DDIM inversion
-                loss = F.l1_loss(latent_prev_pred, latent_prev)
+                loss = F.mse_loss(latent_prev_pred, latent_prev)
                 # Optimise null token
                 loss.backward(retain_graph=False)
                 optimiser.step()
                 optimiser.zero_grad()
+
+                if loss < 1e-5:
+                    break
 
             self.optimised_null_tokens.append(null_token.detach().clone())
 
@@ -95,39 +100,69 @@ class NullTokenOptimisation:
                 eps = self.diffusion._guidance(latent_cur, t_vector, null_token, condition, self.guidance_scale)
                 # TODO: Include generator
                 # TODO: Include next_step and prev_step interface
-                latent_cur = scheduler.step(eps, t, latent_cur, generator=None).prev_sample
+                latent_cur = scheduler.step(eps, t, latent_cur, generator=generator).prev_sample
             
         assert len(self.optimised_null_tokens) == len(self.latents) - 1
 
     def generate(
         self,
+        condition: Optional[torch.FloatTensor] = None,
+        swap_fraction: float = 0.25,
         callbacks: Optional[List[DiffusionCallback]] = None,
         disable_progress_bar: bool = True,
+        generator: Optional[torch.Generator] = None,
     ) -> torch.FloatTensor:
-        # TODO: Include generator for latents
         # Variables needed for guided generation
         n_timesteps = len(self.latents)
         device = self.x.device
         scheduler = self.diffusion.get_prediction_scheduler(False, "sample")
         n_timesteps = self.diffusion.get_timesteps("sample")
         latent = self.latents[0].to(device)
+        if condition is not None:
+            condition = condition.unsqueeze(0).repeat((self.x.shape[0], 1, 1)).to(device)
+            condition = torch.cat([self.condition, condition])
+            latent = latent.repeat((2, 1, 1))
+
         # Store initial state in callbacks
         if callbacks is not None:
             for callback in callbacks:
-                callback(latent, None, None)
+                _latent = latent if condition is None else latent.chunk(2)[1]
+                callback(_latent, None, None)
+
         # Guided generation using optimised null-tokens
         for t, null_token in tqdm(enumerate(self.optimised_null_tokens), disable=disable_progress_bar):
             t_vector = torch.full((self.x.shape[0],), t, dtype=torch.long, device=device)
-            eps = self.diffusion._guidance(
-                latent,
-                t_vector,
-                self.optimised_null_tokens[t],
-                self.condition,
-                self.guidance_scale,
-            )
-            latent = scheduler.step(eps, t, latent, generator=None).prev_sample
+            if condition is None:
+                # Reconstruction
+                eps = self.diffusion._guidance(
+                    latent,
+                    t_vector,
+                    self.optimised_null_tokens[t],
+                    self.condition,
+                    self.guidance_scale,
+                )
+            else:
+                # Edit
+                eps = self.diffusion._guidance(
+                    latent,
+                    t_vector.repeat((2)),
+                    self.optimised_null_tokens[t].repeat((2, 1, 1)),
+                    condition,
+                    self.guidance_scale,
+                    # Original embedding into edit pathway for the first 40 steps
+                    {"swap": True} if t > int(n_timesteps * swap_fraction) else {},
+                )
+            latent = scheduler.step(eps, t, latent, generator=generator).prev_sample
             if callbacks is not None:
                 for callback in callbacks:
-                    callback(latent, t, eps)
+                    # TODO: Include reconstruction and latent path in callback
+                    _latent = latent if condition is None else latent.chunk(2)[1]
+                    callback(_latent, t, eps)
+
+        if condition is not None:
+            B, C, D = latent.shape
+            latent = latent.reshape(2, B // 2, C, D)
+            # CrossAttention module assumes original path is 0th and edit is 1st index.
+            latent = latent[1]
+        
         return latent
-    

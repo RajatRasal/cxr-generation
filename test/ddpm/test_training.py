@@ -57,12 +57,14 @@ def test_training(seed, model_folder_and_name_and_exp):
     # Load model
     model = DiffusionLightningModule(
         dim=20,
-        dim_mults=[1],
+        resnet_block_groups=2,
+        dim_mults=[1, 2],
         channels=1,
-        train_timesteps=100,
-        sample_timesteps=10,
+        train_timesteps=1000,
+        sample_timesteps=50,
         dataset_size=10000,
         beta_schedule="cosine",
+        rescale_betas_zero_snr=True,
         sanity_check=True,
         folder=model_folder,
         dataset_seed=seed,

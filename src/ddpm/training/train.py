@@ -45,6 +45,7 @@ class DiffusionLightningModule(L.LightningModule):
         beta_start: float = 0.0001,
         beta_end: float = 0.02,
         beta_schedule: Literal["linear", "scaled_linear", "cosine"] = "linear",
+        rescale_betas_zero_snr: bool = False,
         uncond_prob: float = 0.25,
         dataset_seed: int = 0,
         min_clusters: int = 2,
@@ -80,6 +81,7 @@ class DiffusionLightningModule(L.LightningModule):
             self.hparams.beta_start,
             self.hparams.beta_end,
             self.hparams.beta_schedule,
+            self.hparams.rescale_betas_zero_snr,
             self.device,
         )
 

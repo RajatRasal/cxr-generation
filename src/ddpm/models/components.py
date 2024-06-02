@@ -1,5 +1,5 @@
 import math
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -11,7 +11,15 @@ from ddpm.models.utils import default, exists
 
 class Upsample(nn.Module):
 
-    def __init__(self, dim: int, dim_out: Optional[int] = None, scale_factor: int = 2, kernel_size: int = 3, padding: int = 1):
+    def __init__(
+        self,
+        dim: int,
+        dim_out: Optional[int] = None,
+        scale_factor: int = 2,
+        kernel_size: int = 3,
+        padding: int = 1,
+    ):
+        super().__init__()
         self.upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
         self.conv = nn.Conv1d(dim, default(dim_out, dim), kernel_size=kernel_size, padding=padding)
     
@@ -23,8 +31,22 @@ class Upsample(nn.Module):
 
 class Downsample(nn.Module):
     
-    def __init__(self, dim: int, dim_out: Optional[int] = None, kernel_size: int = 4, stride: int = 2, padding: int = 1):
-        self.conv = nn.Conv1d(dim, default(dim, dim_out), kernel_size=kernel_size, stride=stride, padding=padding)
+    def __init__(
+        self,
+        dim: int,
+        dim_out: Optional[int] = None,
+        kernel_size: int = 4,
+        stride: int = 2,
+        padding: int = 1,
+    ):
+        super().__init__()
+        self.conv = nn.Conv1d(
+            dim,
+            default(dim, dim_out),
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
         return self.conv(x)
@@ -72,6 +94,7 @@ class Block(nn.Module):
 
 
 class ResnetBlock(nn.Module):
+
     def __init__(self, dim: int, dim_out: int, time_emb_dim: Optional[int] = None, groups: int = 8):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -96,6 +119,7 @@ class ResnetBlock(nn.Module):
 
 
 class Residual(nn.Module):
+
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
@@ -105,6 +129,7 @@ class Residual(nn.Module):
 
 
 class RMSNorm(nn.Module):
+
     def __init__(self, dim):
         super().__init__()
         self.g = nn.Parameter(torch.ones(1, dim, 1))
@@ -114,6 +139,7 @@ class RMSNorm(nn.Module):
 
 
 class PreNorm(nn.Module):
+
     def __init__(self, dim, fn):
         super().__init__()
         self.fn = fn
@@ -125,7 +151,8 @@ class PreNorm(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, dim, heads = 4, dim_head = 32, context_dim = 512):
+
+    def __init__(self, dim: int, heads: int = 4, dim_head: int = 32, context_dim: int = 512):
         super().__init__()
         self.scale = dim_head ** -0.5
         self.heads = heads
@@ -136,7 +163,7 @@ class CrossAttention(nn.Module):
         self.to_qkv = nn.Conv1d(dim, hidden_dim * 3, kernel_size=1, bias=False)
         self.to_out = nn.Conv1d(hidden_dim, dim, 1)
 
-    def forward(self, x, context=None):
+    def forward(self, x: torch.FloatTensor, context: torch.FloatTensor = None, swap: bool = False):
         b, c, n = x.shape
         if context is None:
             q, k, v = self.to_qkv(x).chunk(3, dim=1)
@@ -146,6 +173,18 @@ class CrossAttention(nn.Module):
 
         sim = einsum("b h d i, b h d j -> b h i j", q, k)
         attn = sim.softmax(dim=-1)
+        # TODO: Make this more formalised
+        #######################
+        if swap:
+            # Assuming original path is 0th and edit is 1st index.
+            # Swap original path into edit path.
+            B, C, D1, D2 = attn.shape
+            # Assuming original path is 0th and edit is 1st index.
+            attn_chunked = attn.reshape(2, B // 2, C, D1, D2)
+            attn_original = attn_chunked[0].clone()
+            attn_chunked[1] = attn_original
+            attn = attn_chunked.reshape(B, C, D1, D2)
+        #######################
         out = einsum("b h i j, b h d j -> b h i d", attn, v)
 
         out = rearrange(out, "b h n d -> b (h d) n")

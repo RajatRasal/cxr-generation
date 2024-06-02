@@ -86,6 +86,8 @@ def _trajectory_densities(
     forward: bool,
     y_lims: Tuple[float, float],
     fast: bool = True,
+    no_ticks: bool = False,
+    n_examples: int = 5,
 ):
     # Set background colour for area not covered by KDE
     if fast:
@@ -115,7 +117,7 @@ def _trajectory_densities(
     # KDEplot normalised per timestep
     if fast:
         for i, traj in enumerate(trajectories[:500]):
-            ax.plot(timesteps, traj, color="#3f2b4f", lw=0.5)
+            ax.plot(timesteps, traj, color="dimgray", lw=0.1, alpha=0.75)
     else:
         data = [
             (t - 1, x)
@@ -138,12 +140,14 @@ def _trajectory_densities(
     # No labels or ticks
     ax.set_ylabel("")
     ax.set_xlabel("")
+    if no_ticks:
+        ax.tick_params(labelbottom=False)
+        ax.xaxis.set_ticks_position("none")
     ax.tick_params(labelleft=False)
     ax.yaxis.set_ticks_position("none")
 
-    n_colours = 5
-    traj_colour_palette = sns.mpl_palette("tab10", n_colors=n_colours)
-    for i, traj in enumerate(trajectories[:n_colours]):
+    traj_colour_palette = sns.mpl_palette("tab10", n_colors=n_examples)
+    for i, traj in enumerate(trajectories[:n_examples]):
         ax.plot(timesteps, traj, ls="--", color=traj_colour_palette[i], lw=3.0)
 
 
@@ -309,6 +313,194 @@ def trajectory_plot_1d_with_inverse(
         return image_name 
 
 
+def trajectory_plots_1d_with_inverse(
+    trajectories_x: List[np.ndarray],
+    inverse_trajectories_x: List[np.ndarray],
+    trajectories_y: List[np.ndarray],
+    inverse_trajectories_y: List[np.ndarray],
+    recons: np.ndarray,
+    T: int,
+    y_lims: Tuple[float, float],
+    save_path: str,
+    kde_bandwidth: float,
+    output_type: str,
+    true_data: Optional[np.ndarray] = None,
+    fast: bool = True,
+    title: str = r"$\longrightarrow \text{Classifier-Free Guidance} \longrightarrow$",
+    title_inv: str = r"$\longrightarrow \text{DDIM Inversion} \longrightarrow$",
+):
+    with plt.style.context("bmh"):
+        fig, axes = plt.subplots(
+            nrows=2,
+            ncols=8,
+            figsize=(25, 6),
+            gridspec_kw={
+                "wspace": 0.05,
+                "width_ratios": [1, 10, 1, 10, 1, 1, 3, 3],
+                "hspace": 0.1,
+                "height_ratios": [1, 1],
+            },
+        )
+
+        gs = axes[0, 6].get_gridspec()
+        for ax in axes[:, 5:].flatten():
+            ax.remove()
+        ax_edits = fig.add_subplot(gs[:, 6:])
+
+        init = 0
+        final = -1
+        init_density_title = "$z_T$"
+        final_density_title = "$z_0$"
+
+        check = np.array([traj[final] for traj in inverse_trajectories_x]) == np.array([traj[init] for traj in trajectories_x])
+        assert all(check.tolist())
+        check = np.array([traj[final] for traj in inverse_trajectories_y]) == np.array([traj[init] for traj in trajectories_y])
+        assert all(check.tolist())
+
+        ### Edits
+        ax_edits.set_title(r"$ \text{Edits} $")
+        ax_edits.set_xlim((y_lims[0] + 1, y_lims[1] - 1))
+        ax_edits.set_ylim((y_lims[0] + 1, y_lims[1] - 1))
+        ax_edits.set_facecolor("white")
+        original_df = pd.DataFrame(true_data, columns=[r"$x$", r"$y$"])
+        # edit_df = pd.DataFrame([
+        #     (x_traj[-1], y_traj[-1])
+        #     for x_traj, y_traj in zip(trajectories_x, trajectories_y)
+        # ], columns=[r"$x$", r"$y$"])
+        sns.kdeplot(data=original_df, x=r"$x$", y=r"$y$", ax=ax_edits, fill=True, thresh=0.2, levels=5, cmap="Greys")
+        n_examples = 5
+        palette = sns.mpl_palette("tab10", n_colors=n_examples)
+        for traj_x, traj_y, c in zip(trajectories_x[:n_examples], trajectories_y[:n_examples], palette):
+            ax_edits.plot(traj_x[-1], traj_y[-1], "x", color=c)
+        for traj_x, traj_y, c in zip(inverse_trajectories_x[:n_examples], inverse_trajectories_y[:n_examples], palette):
+            ax_edits.plot(traj_x[0], traj_y[0], "o", color=c)
+        for point, c in zip(recons, palette):
+            ax_edits.plot(point[0, 0], point[0, 1], "^", color=c)
+        ax_edits.margins(2)
+        ax_edits.tick_params(labelleft=False)
+        ax_edits.tick_params(labelright=True)
+        ax_edits.yaxis.set_ticks_position("right")
+        ax_edits.set_ylabel(ax_edits.get_ylabel(), rotation="horizontal")
+        ax_edits.yaxis.set_label_position("right")
+        xticks = ax_edits.get_xticklabels()
+        xticks[0] = ""
+        xticks[-1] = ""
+        yticks = ax_edits.get_yticklabels()
+        yticks[0] = ""
+        yticks[-1] = ""
+        ax_edits.set_xticklabels(xticks)
+        ax_edits.set_yticklabels(yticks)
+
+        ### Top row 
+        top_row = axes[0]
+
+        _trajectory_densities(
+            top_row[1],
+            inverse_trajectories_x,
+            title_inv,
+            forward=False,
+            y_lims=y_lims,
+            fast=fast,
+            no_ticks=True,
+        )
+        _trajectory_densities(
+            top_row[3],
+            trajectories_x,
+            title,
+            forward=True,
+            y_lims=y_lims,
+            fast=fast,
+            no_ticks=True,
+        )
+
+        _density_plot_1d(
+            ax=top_row[0],
+            data=np.array([traj[init] for traj in inverse_trajectories_x]),
+            y_lims=y_lims,
+            linspace=100,
+            title=final_density_title,
+            y_label="$x$",
+            y_ticks="left",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=top_row[2],
+            data=np.array([traj[init] for traj in trajectories_x]),
+            y_lims=y_lims,
+            linspace=100,
+            title=init_density_title,
+            y_label="",
+            y_ticks="none",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=top_row[4],
+            data=np.array([traj[final] for traj in trajectories_x]),
+            y_lims=y_lims,
+            linspace=100,
+            title=final_density_title,
+            y_label=None,
+            y_ticks="right",
+            kde_bandwidth=kde_bandwidth,
+        )
+
+        ### Bottom row
+        bottom_row = axes[1]
+
+        _trajectory_densities(
+            bottom_row[1],
+            inverse_trajectories_y,
+            "",
+            forward=False,
+            y_lims=y_lims,
+            fast=fast,
+        )
+        _trajectory_densities(
+            bottom_row[3],
+            trajectories_y,
+            "",
+            forward=True,
+            y_lims=y_lims,
+            fast=fast,
+        )
+
+        _density_plot_1d(
+            ax=bottom_row[0],
+            data=np.array([traj[init] for traj in inverse_trajectories_y]),
+            y_lims=y_lims,
+            linspace=100,
+            title="",
+            y_label="$y$",
+            y_ticks="left",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=bottom_row[2],
+            data=np.array([traj[init] for traj in trajectories_y]),
+            y_lims=y_lims,
+            linspace=100,
+            title="",
+            y_label="",
+            y_ticks="none",
+            kde_bandwidth=kde_bandwidth,
+        )
+        _density_plot_1d(
+            ax=bottom_row[4],
+            data=np.array([traj[final] for traj in trajectories_y]),
+            y_lims=y_lims,
+            linspace=100,
+            title="",
+            y_label=None,
+            y_ticks="right",
+            kde_bandwidth=kde_bandwidth,
+        )
+
+        # Save plot
+        image_name = f"{save_path}.{output_type}"
+        fig.savefig(image_name, format=output_type, bbox_inches="tight")
+        return image_name 
+
+
 def visualise_gmm(
     original: torch.FloatTensor,
     center_box: Tuple[float, float],
@@ -324,7 +516,7 @@ def visualise_gmm(
         ax.set_facecolor("white")
 
         original_df = pd.DataFrame(original, columns=["x", "y"])
-        sns.kdeplot(data=original_df, x="x", y="y", ax=ax, fill=True, thresh=0.2, levels=5, cmap="Purples")
+        sns.kdeplot(data=original_df, x="x", y="y", ax=ax, fill=True, thresh=0.2, levels=5, cmap="Greys")
 
         for i, keypoint in enumerate(keypoints):
             ax.scatter(keypoint[0], keypoint[1], marker="x", c="#4A993A", s=0.5, linewidths=0.5)  # "#4A993A")

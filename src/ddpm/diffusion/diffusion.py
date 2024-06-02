@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import torch
 from diffusers.schedulers import DDPMScheduler, DDIMScheduler, DDIMInverseScheduler, SchedulerMixin
@@ -19,6 +19,7 @@ class Diffusion:
         beta_start: float = 0.0001,
         beta_end: float = 0.02,
         beta_schedule: Literal["linear", "scaled_linear", "cosine"] = "linear",
+        rescale_betas_zero_snr: bool = False,
         device: torch.device = "cpu",
     ):
         self.unet = unet
@@ -34,6 +35,7 @@ class Diffusion:
             "scaled_linear": "scaled_linear",
             "cosine": "squaredcos_cap_v2",
         }[beta_schedule]
+        self.rescale_betas_zero_snr = rescale_betas_zero_snr
 
         # Image generation schedulers
         self.ddpm_scheduler = DDPMScheduler(
@@ -42,6 +44,7 @@ class Diffusion:
             beta_end=self.beta_end,
             beta_schedule=self.beta_schedule,
             prediction_type="epsilon",
+            rescale_betas_zero_snr=rescale_betas_zero_snr,
         )
         self.ddpm_scheduler.alphas_cumprod = self.ddpm_scheduler.alphas_cumprod.to(device=self.device)
         self.ddim_scheduler = DDIMScheduler(
@@ -50,6 +53,7 @@ class Diffusion:
             beta_end=self.beta_end,
             beta_schedule=self.beta_schedule,
             prediction_type="epsilon",
+            rescale_betas_zero_snr=rescale_betas_zero_snr,
         )
         self.ddim_scheduler.alphas_cumprod = self.ddim_scheduler.alphas_cumprod.to(device=self.device)
 
@@ -60,6 +64,7 @@ class Diffusion:
             beta_end=self.beta_end,
             beta_schedule=self.beta_schedule,
             prediction_type="epsilon",
+            rescale_betas_zero_snr=rescale_betas_zero_snr,
         )
         self.ddim_inverse_scheduler.alphas_cumprod = self.ddim_inverse_scheduler.alphas_cumprod.to(device=self.device)
 
@@ -71,7 +76,11 @@ class Diffusion:
         else:
             raise ValueError(f"`timesteps` must be either 'sample' or 'train' not {timesteps}")
 
-    def get_prediction_scheduler(self, deterministic: bool, timesteps: Literal["train", "sample"]) -> Union[DDPMScheduler, DDIMScheduler]:
+    def get_prediction_scheduler(
+        self,
+        deterministic: bool,
+        timesteps: Literal["train", "sample"],
+    ) -> Union[DDPMScheduler, DDIMScheduler]:
         timesteps = self.get_timesteps(timesteps)
         scheduler = self.ddim_scheduler if deterministic else self.ddpm_scheduler
         scheduler.set_timesteps(num_inference_steps=timesteps, device=self.device)
@@ -84,9 +93,10 @@ class Diffusion:
         null_token: torch.FloatTensor,
         conditions: torch.FloatTensor,
         guidance_scale: float,
+        cross_attn_kwargs: Dict[str, Any] = {},
     ) -> torch.FloatTensor:
-        eps_uncond = self.noise_pred(x, t, null_token)
-        eps_cond = self.noise_pred(x, t, conditions)
+        eps_uncond = self.noise_pred(x, t, null_token, {})
+        eps_cond = self.noise_pred(x, t, conditions, cross_attn_kwargs)
         eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
         return eps
 
@@ -94,11 +104,17 @@ class Diffusion:
         self,
         latents: torch.FloatTensor,
         timesteps: torch.LongTensor,
-        conditions: Optional[torch.FloatTensor] = None,
+        conditions: Optional[torch.FloatTensor],
+        cross_attn_kwargs: Dict[str, Any] = {},
     ) -> torch.FloatTensor:
-        return self.unet(latents, timesteps, conditions)
+        return self.unet(latents, timesteps, conditions, cross_attn_kwargs)
 
-    def add_noise(self, x0: torch.FloatTensor, noise: torch.FloatTensor, timesteps: torch.LongTensor) -> torch.FloatTensor:
+    def add_noise(
+        self,
+        x0: torch.FloatTensor,
+        noise: torch.FloatTensor,
+        timesteps: torch.LongTensor,
+    ) -> torch.FloatTensor:
         return self.ddpm_scheduler.add_noise(x0, noise, timesteps)
 
     @torch.no_grad()

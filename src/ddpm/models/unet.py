@@ -75,6 +75,8 @@ class Unet(nn.Module):
         self.final_res_block = block_klass(dim * 2, dim, time_emb_dim=time_dim)
         self.final_conv = nn.Conv1d(dim, out_dim, 1)
 
+    # TODO: Change cross_attn_kwargs to a ConfigDict
+    # TODO: in diffusion.py time is a LongTensor
     def forward(
         self,
         x: torch.FloatTensor,

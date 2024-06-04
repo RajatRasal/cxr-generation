@@ -130,7 +130,6 @@ class Diffusion:
         callbacks: Optional[List[DiffusionCallback]] = None,
         disable_progress_bar: bool = False,
     ) -> torch.FloatTensor:
-        # (batch_size, 1, dims)
         x = xT
         _timesteps = self.get_timesteps(timesteps)
         scheduler = self.get_prediction_scheduler(deterministic, timesteps)
@@ -159,7 +158,6 @@ class Diffusion:
         callbacks: Optional[List[DiffusionCallback]] = None,
         disable_progress_bar: bool = False,
     ) -> torch.FloatTensor:
-        # (batch_size, 1, dims)
         x = x0
         _timesteps = self.get_timesteps(timesteps)
         self.ddim_inverse_scheduler.set_timesteps(num_inference_steps=_timesteps, device=self.device)

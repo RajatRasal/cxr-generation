@@ -302,7 +302,7 @@ class CrossAttention(nn.Module):
         self,
         x: torch.FloatTensor,
         context: torch.FloatTensor = None,
-        swap: bool = False,  #  Dict[str, Any] = {},
+        swap: bool = False,
     ) -> torch.FloatTensor:
         b, c, h, w = x.shape
 
@@ -312,8 +312,6 @@ class CrossAttention(nn.Module):
         if context is None:
             q, k, v = self.to_qkv(x).chunk(3, dim=1)
         else:
-            # print(x.shape)
-            # print("context:", context.shape)
             q, k, v = self.to_q(x), *self.to_kv(context).chunk(2, dim=1)
         q, k, v = map(lambda t: rearrange(t, "b (h c) x y -> b h (x y) c", h=self.heads), (q, k, v))
         k, v = map(partial(torch.cat, dim=-2), ((mk, k), (mv, v)))

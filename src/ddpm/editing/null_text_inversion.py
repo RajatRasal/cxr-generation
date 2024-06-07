@@ -19,7 +19,12 @@ class NullTokenOptimisation:
         guidance_scale: float,
     ):
         self.diffusion = diffusion
-        self.null_token = null_token.unsqueeze(0)
+        # TODO: Pass in the exact null token with required dimensions
+        # then repeat along the 0th dimension batch_size times.
+        if len(null_token.shape) == 2:
+            self.null_token = null_token.detach().clone().unsqueeze(0)
+        else:
+            self.null_token = null_token.detach().clone()
         self.nti_steps = nti_steps
         self.learning_rate = learning_rate
         self.guidance_scale = guidance_scale
@@ -28,7 +33,7 @@ class NullTokenOptimisation:
         self,
         x: torch.FloatTensor,
         condition: torch.FloatTensor,
-        ddim_inversion_callbacks: Optional[List[DiffusionCallback]] = None,
+        ddim_inversion_callbacks: Optional[List[DiffusionCallback]] = [],
         disable_progress_bar: bool = True,
         generator: Optional[torch.Generator] = None,
     ):
@@ -46,11 +51,15 @@ class NullTokenOptimisation:
             callbacks=[trajectory_callback] + ddim_inversion_callbacks,
             disable_progress_bar=disable_progress_bar,
         )
+        # From T to 0
         self.latents = trajectory_callback.timesteps[::-1]
 
         # Variables needed for NTI
         n_latents = len(self.latents)
-        null_token = self.null_token.repeat((batch_size, 1, 1)).to(device)
+        if len(self.null_token.shape) == 3:
+            null_token = self.null_token.repeat((batch_size, 1, 1)).to(device)
+        else:
+            null_token = self.null_token  #.repeat((batch_size, 1, 1, 1)).to(device)
         n_timesteps = self.diffusion.get_timesteps("sample")
         scheduler = self.diffusion.get_prediction_scheduler(False, "sample")
         latent_cur = self.latents[0].detach().to(device)
@@ -58,15 +67,18 @@ class NullTokenOptimisation:
 
         # NTO is performed per timestep
         self.optimised_null_tokens = []
-        for t in tqdm(range(0, n_timesteps), disable=disable_progress_bar):
+        for i in tqdm(range(n_timesteps), desc="NTO", disable=disable_progress_bar):
+            # Convert index (i) to timestep (t)
+            t = n_timesteps - i - 1
+
             # Clone optimised null-token from previous step
             null_token = null_token.detach().clone().requires_grad_(True)
 
             # NTO target
-            latent_prev = self.latents[t].detach().to(device).requires_grad_(False)
+            latent_prev = self.latents[i].detach().to(device).requires_grad_(False)
 
             # Initialise optimiser
-            lr_scale_factor = 1. - (n_timesteps - t) / n_timesteps
+            lr_scale_factor = 1. - t / n_timesteps
             optimiser = torch.optim.Adam([null_token], lr=self.learning_rate * lr_scale_factor)
 
             # Null-token optimisation loop
@@ -80,7 +92,6 @@ class NullTokenOptimisation:
                     condition,
                     self.guidance_scale,
                 )
-                # TODO: Include generator
                 # TODO: Include next_step and prev_step interface
                 # TODO: NTO callback to track null_token, losses, timesteps
                 latent_prev_pred = scheduler.step(eps, t, latent_cur, generator=generator).prev_sample
@@ -94,11 +105,11 @@ class NullTokenOptimisation:
                 if loss < 1e-5:
                     break
 
-            self.optimised_null_tokens.append(null_token.detach().clone())
+            optimised_null_token = null_token.detach().clone()
+            self.optimised_null_tokens.append(optimised_null_token)
 
             with torch.no_grad():
-                eps = self.diffusion._guidance(latent_cur, t_vector, null_token, condition, self.guidance_scale)
-                # TODO: Include generator
+                eps = self.diffusion._guidance(latent_cur, t_vector, optimised_null_token, condition, self.guidance_scale)
                 # TODO: Include next_step and prev_step interface
                 latent_cur = scheduler.step(eps, t, latent_cur, generator=generator).prev_sample
             
@@ -111,6 +122,7 @@ class NullTokenOptimisation:
         callbacks: Optional[List[DiffusionCallback]] = None,
         disable_progress_bar: bool = True,
         generator: Optional[torch.Generator] = None,
+        corrections: bool = True,
     ) -> torch.FloatTensor:
         # Variables needed for guided generation
         n_timesteps = len(self.latents)
@@ -119,9 +131,15 @@ class NullTokenOptimisation:
         n_timesteps = self.diffusion.get_timesteps("sample")
         latent = self.latents[0].to(device)
         if condition is not None:
-            condition = condition.unsqueeze(0).repeat((self.x.shape[0], 1, 1)).to(device)
+            # TODO: Remove this nasty hack by passing in the correct conditions
+            # TODO: Remove the hack with "corrections" argument when doing 2D NTI
+            if corrections:
+                condition = condition.unsqueeze(0).repeat((self.x.shape[0], 1, 1)).to(device)
             condition = torch.cat([self.condition, condition])
-            latent = latent.repeat((2, 1, 1))
+            if corrections:
+                latent = latent.repeat((2, 1, 1))
+            else:
+                latent = latent.repeat((2, 1, 1, 1))
 
         # Store initial state in callbacks
         if callbacks is not None:
@@ -130,29 +148,39 @@ class NullTokenOptimisation:
                 callback(_latent, None, None)
 
         # Guided generation using optimised null-tokens
-        for t, null_token in tqdm(enumerate(self.optimised_null_tokens), disable=disable_progress_bar):
+        for i, null_token in tqdm(enumerate(self.optimised_null_tokens), disable=disable_progress_bar):
+            t = n_timesteps - i - 1
+
             t_vector = torch.full((self.x.shape[0],), t, dtype=torch.long, device=device)
+
             if condition is None:
                 # Reconstruction
                 eps = self.diffusion._guidance(
                     latent,
                     t_vector,
-                    self.optimised_null_tokens[t],
+                    null_token,
                     self.condition,
                     self.guidance_scale,
                 )
             else:
                 # Edit
+                # TODO: Write this repeat statement to be more generic, without the correction condition
+                if corrections:
+                    nt = null_token.repeat((2, 1, 1))
+                else:
+                    nt = null_token.repeat((2, 1, 1, 1))
                 eps = self.diffusion._guidance(
                     latent,
                     t_vector.repeat((2)),
-                    self.optimised_null_tokens[t].repeat((2, 1, 1)),
+                    nt, 
                     condition,
                     self.guidance_scale,
-                    # Original embedding into edit pathway for the first 40 steps
+                    # Original embedding into edit pathway for the last 40 steps
                     {"swap": True} if t > int(n_timesteps * swap_fraction) else {},
-                )
-            latent = scheduler.step(eps, t, latent, generator=generator).prev_sample
+                ).detach()
+
+            latent = scheduler.step(eps, t, latent, generator=generator).prev_sample.detach()
+
             if callbacks is not None:
                 for callback in callbacks:
                     # TODO: Include reconstruction and latent path in callback
@@ -160,8 +188,12 @@ class NullTokenOptimisation:
                     callback(_latent, t, eps)
 
         if condition is not None:
-            B, C, D = latent.shape
-            latent = latent.reshape(2, B // 2, C, D)
+            if corrections:
+                B, C, D = latent.shape
+                latent = latent.reshape(2, B // 2, C, D)
+            else:
+                B, C, D1, D2 = latent.shape
+                latent = latent.reshape(2, B // 2, C, D1, D2)
             # CrossAttention module assumes original path is 0th and edit is 1st index.
             latent = latent[1]
         

@@ -72,14 +72,14 @@ def colour_mnist_with_fixed_saturation():
 
         # Save dataset to raw files
         save_idx(perturbed_images, out_file)
-        save_idx(hues, out_file_hue)
+        np.savetxt(out_file_hue, hues)
 
     # Load dataset from raw files
     train_name = "train-images-idx3-ubyte.gz"
-    train_name_hue = "train-hues-idx1-ubyte.gz"
+    train_name_hue = "train-hues.txt"
     train_name_label = "train-labels-idx1-ubyte.gz"
     test_name = "t10k-images-idx3-ubyte.gz"
-    test_name_hue = "t10k-hues-idx1-ubyte.gz"
+    test_name_hue = "t10k-hues.txt"
     test_name_label = "t10k-labels-idx1-ubyte.gz"
 
     train_path = os.path.join(args.raw_path, train_name)

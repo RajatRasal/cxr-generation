@@ -138,6 +138,7 @@ class Diffusion:
                 callback(x, None, None)
         for t in tqdm(reversed(range(_timesteps)), desc="Sampling", disable=disable_progress_bar):
             t_vector = torch.full((x.shape[0],), t, dtype=torch.long, device=self.device)
+            # TODO: Do not do CFG by default - conditional by default would be fine too.
             if conditions is not None:
                 eps = self._guidance(x, t_vector, null_token, conditions, guidance_scale)
             else:

@@ -20,9 +20,13 @@ experiments = "semantic_editing.experiments:main"
 
 colour_mnist = "datasets.mnist.colour:colour_mnist_with_fixed_saturation"
 
+# dataloader_test = "datasets.mnist.datamodules:main"
+data_test = "datasets.mnist.datasets:main"
 ddpm_train = "ddpm.training.train:main"
 mnist_ddpm_train = "ddpm.training.train_mnist:main"
+mnist_grey_ddpm_train = "ddpm.training.train_mnist_grey:main"
 # mnist_nto = "ddpm.training.train_mnist:editing"
+mnist_nto_grey = "ddpm.training.train_mnist_grey:editing"
 
 [tool.poetry.dependencies]
 python = "3.9.18"

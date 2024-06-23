@@ -179,7 +179,7 @@ class DynamicPromptOptimisation(CFGOptimisation):
             tokens, self.index_noun_pairs = find_tokens_and_noun_indices(self.model, prompt)
 
         # Check that each noun is in the prompt 
-        assert all([tokens[i][:-4] == noun for i, noun in self.index_noun_pairs])
+        assert all([tokens[i][:-4] == noun[:-4] for i, noun in self.index_noun_pairs])
         self.noun_indices = [i for i, _ in self.index_noun_pairs]
         self.token_ids = self.model.convert_tokens_to_ids(tokens)
         self.tokens = tokens

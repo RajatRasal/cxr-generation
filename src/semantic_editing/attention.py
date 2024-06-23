@@ -20,8 +20,9 @@ def _unflatten_attn_map(item: torch.FloatTensor, res: int) -> torch.FloatTensor:
 
 class AttentionStore(ABC):
 
-    def __init__(self):
+    def __init__(self, resolutions: List[int] = [8, 16, 32, 64]):
         self._num_att_layers = 0
+        self.resolutions = resolutions
         self.reset()
 
     def _attention_store_key_string(
@@ -39,8 +40,7 @@ class AttentionStore(ABC):
         places_in_unet = ["down", "mid", "up"]
         is_cross = [True, False]
         attn_components = list(get_args(ATTENTION_COMPONENT)) 
-        resolutions = [8, 16, 32, 64]
-        for place_in_unet, _is_cross, attn_component, res in product(places_in_unet, is_cross, attn_components, resolutions):
+        for place_in_unet, _is_cross, attn_component, res in product(places_in_unet, is_cross, attn_components, self.resolutions):
             dict_key = self._attention_store_key_string(place_in_unet, _is_cross, attn_component, res)
             step_store[dict_key] = None
         return step_store
@@ -137,10 +137,8 @@ class AttentionStore(ABC):
 
 class AttentionStoreTimestep(AttentionStore):
 
-    def __init__(self, res: int, is_cross: bool):
-        super().__init__()
-        self.res = res
-        self.is_cross = is_cross
+    def __init__(self, resolutions: List[int] = [8, 16, 32, 64]):
+        super().__init__(resolutions)
 
     def _accumulate(self, item: List[torch.FloatTensor], res: int) -> List[torch.FloatTensor]:
         return [_unflatten_attn_map(_item, res) for _item in item]
@@ -156,8 +154,6 @@ class AttentionStoreTimestep(AttentionStore):
         value: torch.FloatTensor,
     ):
         res = int(math.sqrt(attn.shape[1]))
-        if not (res == self.res and is_cross == self.is_cross):
-            return
         # TODO: As a general class, this should store feature, query, key and value
         # vectors also.
         dict_key = self._attention_store_key_string(place_in_unet, is_cross, "attn", res)
@@ -175,6 +171,9 @@ class AttentionStoreTimestep(AttentionStore):
     
 
 class AttentionStoreAccumulate(AttentionStore):
+
+    def __init__(self, resolutions: List[int] = [8, 16, 32, 64]):
+        super().__init__(resolutions)
 
     def _accumulate(self, item: List[torch.FloatTensor], res: int) -> List[torch.FloatTensor]:
         return [_unflatten_attn_map(_item, res) for _item in item]
@@ -292,7 +291,7 @@ class AttentionStoreEdit(AttentionStore, ABC):
             if self._cur_att_layer == self._num_att_layers:
                 self._cur_att_layer = 0
                 self._between_steps()
-
+        
         return self._edit(
             attn,
             is_cross,
@@ -408,7 +407,7 @@ class AttnProcessorWithAttentionStore:
         query = attn.head_to_batch_dim(query)
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
-
+        
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
 
         # Only need to store attention maps during the Attend and Excite process
@@ -449,3 +448,22 @@ def prepare_unet(unet: UNet2DConditionModel) -> UNet2DConditionModel:
             module.requires_grad_(False)
     return unet
 
+
+def set_attention_processor(unet: UNet2DConditionModel) -> UNet2DConditionModel:
+    attention_processors = {}
+    attention_store = AttentionStoreRefine(include_store=False)
+    for name in model.unet.attn_processors.keys():
+        if name.startswith("mid_block"):
+            place_in_unet = "mid"
+        elif name.startswith("up_blocks"):
+            place_in_unet = "up"
+        elif name.startswith("down_blocks"):
+            place_in_unet = "down"
+        else:
+            continue
+        attention_processors[name] = AttnProcessorWithAttentionStore(
+            attention_store=attention_store,
+            place_in_unet=place_in_unet,
+        )
+    model.unet.set_attn_processor(attention_processors)
+    return unet

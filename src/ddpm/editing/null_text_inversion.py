@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -17,17 +17,16 @@ class NullTokenOptimisation:
         nti_steps: int,
         learning_rate: float,
         guidance_scale: float,
+        timesteps: int,
     ):
         self.diffusion = diffusion
         # TODO: Pass in the exact null token with required dimensions
-        # then repeat along the 0th dimension batch_size times.
-        if len(null_token.shape) == 2:
-            self.null_token = null_token.detach().clone().unsqueeze(0)
-        else:
-            self.null_token = null_token.detach().clone()
+        # then repeat along the 0th dimension batch_size times in fit and generate methods.
+        self.null_token = null_token.detach().clone()
         self.nti_steps = nti_steps
         self.learning_rate = learning_rate
         self.guidance_scale = guidance_scale
+        self.timesteps = timesteps
 
     def fit(
         self,
@@ -37,8 +36,8 @@ class NullTokenOptimisation:
         disable_progress_bar: bool = True,
         generator: Optional[torch.Generator] = None,
     ):
-        self.x = x
-        self.condition = condition
+        self.x = x.detach().clone().requires_grad_(False)
+        self.condition = condition.detach().clone().requires_grad_(False)
         device = self.x.device
         batch_size = x.shape[0]
 
@@ -47,30 +46,27 @@ class NullTokenOptimisation:
         self.diffusion.ddim_inversion(
             x,
             condition,
-            "sample",
+            self.timesteps,
             callbacks=[trajectory_callback] + ddim_inversion_callbacks,
             disable_progress_bar=disable_progress_bar,
         )
         # From T to 0
-        self.latents = trajectory_callback.timesteps[::-1]
+        self.latents = trajectory_callback.data[::-1][1:]
 
         # Variables needed for NTI
         n_latents = len(self.latents)
-        if len(self.null_token.shape) == 3:
-            null_token = self.null_token.repeat((batch_size, 1, 1)).to(device)
-        else:
-            null_token = self.null_token  #.repeat((batch_size, 1, 1, 1)).to(device)
-        n_timesteps = self.diffusion.get_timesteps("sample")
-        scheduler = self.diffusion.get_prediction_scheduler(False, "sample")
+        # repeats = tuple([batch_size] + [1] * (len(self.null_token.shape) - 1))
+        null_token = self.null_token.clone()
+        condition = self.condition.clone()
+        n_timesteps = self.timesteps
+        scheduler = self.diffusion.get_prediction_scheduler(False, self.timesteps)
         latent_cur = self.latents[0].detach().to(device)
-        condition = self.condition.clone().requires_grad_(False)
+        timesteps = scheduler.timesteps
+        assert len(timesteps) == len(self.latents) == n_timesteps
 
         # NTO is performed per timestep
         self.optimised_null_tokens = []
-        for i in tqdm(range(n_timesteps), desc="NTO", disable=disable_progress_bar):
-            # Convert index (i) to timestep (t)
-            t = n_timesteps - i - 1
-
+        for i, t in tqdm(enumerate(timesteps), total=n_timesteps, disable=disable_progress_bar):
             # Clone optimised null-token from previous step
             null_token = null_token.detach().clone().requires_grad_(True)
 
@@ -78,7 +74,7 @@ class NullTokenOptimisation:
             latent_prev = self.latents[i].detach().to(device).requires_grad_(False)
 
             # Initialise optimiser
-            lr_scale_factor = 1. - t / n_timesteps
+            lr_scale_factor = 1. - i / n_timesteps
             optimiser = torch.optim.Adam([null_token], lr=self.learning_rate * lr_scale_factor)
 
             # Null-token optimisation loop
@@ -113,7 +109,7 @@ class NullTokenOptimisation:
                 # TODO: Include next_step and prev_step interface
                 latent_cur = scheduler.step(eps, t, latent_cur, generator=generator).prev_sample
             
-        assert len(self.optimised_null_tokens) == len(self.latents) - 1
+        assert len(self.optimised_null_tokens) == len(self.latents)
 
     def generate(
         self,
@@ -122,24 +118,19 @@ class NullTokenOptimisation:
         callbacks: Optional[List[DiffusionCallback]] = None,
         disable_progress_bar: bool = True,
         generator: Optional[torch.Generator] = None,
-        corrections: bool = True,
     ) -> torch.FloatTensor:
         # Variables needed for guided generation
-        n_timesteps = len(self.latents)
         device = self.x.device
-        scheduler = self.diffusion.get_prediction_scheduler(False, "sample")
-        n_timesteps = self.diffusion.get_timesteps("sample")
+        scheduler = self.diffusion.get_prediction_scheduler(False, self.timesteps)
+        timesteps = scheduler.timesteps
+        n_timesteps = len(timesteps)
+        assert len(self.optimised_null_tokens) == len(timesteps)
         latent = self.latents[0].to(device)
         if condition is not None:
             # TODO: Remove this nasty hack by passing in the correct conditions
             # TODO: Remove the hack with "corrections" argument when doing 2D NTI
-            if corrections:
-                condition = condition.unsqueeze(0).repeat((self.x.shape[0], 1, 1)).to(device)
             condition = torch.cat([self.condition, condition])
-            if corrections:
-                latent = latent.repeat((2, 1, 1))
-            else:
-                latent = latent.repeat((2, 1, 1, 1))
+            latent = latent.repeat((2, 1, 1, 1))
 
         # Store initial state in callbacks
         if callbacks is not None:
@@ -148,9 +139,7 @@ class NullTokenOptimisation:
                 callback(_latent, None, None)
 
         # Guided generation using optimised null-tokens
-        for i, null_token in tqdm(enumerate(self.optimised_null_tokens), disable=disable_progress_bar):
-            t = n_timesteps - i - 1
-
+        for i, (t, null_token) in tqdm(enumerate(zip(timesteps, self.optimised_null_tokens)), total=n_timesteps, disable=disable_progress_bar):
             t_vector = torch.full((self.x.shape[0],), t, dtype=torch.long, device=device)
 
             if condition is None:
@@ -164,19 +153,25 @@ class NullTokenOptimisation:
                 )
             else:
                 # Edit
-                # TODO: Write this repeat statement to be more generic, without the correction condition
-                if corrections:
-                    nt = null_token.repeat((2, 1, 1))
+                if self.diffusion._using_diffusers in ["unet_diffusers_cond", "unet_diffusers"]:
+                    cs_kwargs = {
+                        "cross_replace": i < int(n_timesteps * swap_fraction),
+                        "self_replace": i < int(n_timesteps * swap_fraction),
+                        "amplify_indices": {},
+                    }
                 else:
-                    nt = null_token.repeat((2, 1, 1, 1))
+                    cs_kwargs = {"swap": True} if t > int(n_timesteps * swap_fraction) else {}
+
+                # TODO: Write this repeat statement to be more generic, without the correction condition
+                nt = null_token.repeat((2, 1, 1))
+
                 eps = self.diffusion._guidance(
                     latent,
                     t_vector.repeat((2)),
                     nt, 
                     condition,
                     self.guidance_scale,
-                    # Original embedding into edit pathway for the last 40 steps
-                    {"swap": True} if t > int(n_timesteps * swap_fraction) else {},
+                    cs_kwargs,
                 ).detach()
 
             latent = scheduler.step(eps, t, latent, generator=generator).prev_sample.detach()
@@ -188,12 +183,8 @@ class NullTokenOptimisation:
                     callback(_latent, t, eps)
 
         if condition is not None:
-            if corrections:
-                B, C, D = latent.shape
-                latent = latent.reshape(2, B // 2, C, D)
-            else:
-                B, C, D1, D2 = latent.shape
-                latent = latent.reshape(2, B // 2, C, D1, D2)
+            B, C, D1, D2 = latent.shape
+            latent = latent.reshape(2, B // 2, C, D1, D2)
             # CrossAttention module assumes original path is 0th and edit is 1st index.
             latent = latent[1]
         

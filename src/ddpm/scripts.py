@@ -5,14 +5,19 @@ from typing import Literal
 
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 import torch
+import torch.nn.functional as F
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.strategies import DDPStrategy
 from lightning.pytorch.tuner.tuning import Tuner
+from torchmetrics import Accuracy
 
-from datasets.mnist.datamodules import MNISTDataModule, get_mnist_variant
+from classification.mnist import MNISTClassifierLightningModule
+from datasets.mnist.datamodules import get_mnist_variant
+from ddpm.diffusion.generative_classifier import classify
 from ddpm.editing.null_text_inversion import NullTokenOptimisation
 from ddpm.training.conditional import GuidedDiffusionLightningModule
 from ddpm.training.unconditional import DiffusionLightningModule
@@ -132,6 +137,7 @@ def mnist_train_guided():
     parser.add_argument("--blocks", nargs="+", choices=["Block", "ResnetBlock", "AttnBlock", "CrossAttnBlock"], default=["Block", "Block", "Block"])
     parser.add_argument("--uncond-prob", type=float, default=0.2)
     parser.add_argument("--embedding-dim", type=int, default=256)
+    parser.add_argument("--num-sanity-val-steps", type=int, default=-1)
     args = parser.parse_args()
 
     seed_everything(args.seed, workers=True)
@@ -163,13 +169,13 @@ def mnist_train_guided():
     trainer = Trainer(
         accelerator="gpu",
         devices=args.device_id,
-        strategy="auto" if args.device_id != -1 else DDPStrategy(find_unused_parameters=True),
+        strategy=DDPStrategy(find_unused_parameters=True) if args.device_id > 1 else "auto",
         deterministic=True,
         max_epochs=args.max_epochs,
         check_val_every_n_epoch=args.val_freq,
         logger=tb_logger,
         callbacks=[checkpoint_callback],
-        num_sanity_val_steps=-1,
+        num_sanity_val_steps=args.num_sanity_val_steps,
     )
 
     # Tuning batch size is unsupported with distributed strategies in lightning 2.2.4
@@ -186,7 +192,7 @@ def mnist_editing_visualisations():
     parser.add_argument("--version", type=int, default=0)
     args = parser.parse_args()
 
-    output_dir = os.path.join(args.logdir, "editing")
+    output_dir = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/editing")
     os.makedirs(output_dir, exist_ok=True)
 
     ckpt_path = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/checkpoints/last.ckpt")
@@ -311,7 +317,6 @@ def mnist_editing_visualisations():
                 condition=edit_conditions,
                 generator=generator,
                 disable_progress_bar=True,
-                corrections=False,
                 swap_fraction=swap_fraction,
             )
             # Unnormalise image for display
@@ -327,4 +332,103 @@ def mnist_editing_visualisations():
             bbox_inches="tight",
         )
         plt.close()
+
+
+def mnist_reconstruction_editability_curve():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--logdir", type=str, required=True)
+    parser.add_argument("--version", type=int, default=0)
+    parser.add_argument("--cls-logdir", type=str, required=True)
+    parser.add_argument("--cls-version", type=int, default=0)
+    args = parser.parse_args()
+
+    output_dir = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/editing")
+    os.makedirs(output_dir, exist_ok=True)
+
+    ckpt_path = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/checkpoints/last.ckpt")
+    model = GuidedDiffusionLightningModule.load_from_checkpoint(ckpt_path)
+
+    seed_everything(model.hparams.seed)
+
+    # TODO: Load colour from a file
+    dm = get_mnist_variant("grey", model.hparams.seed, 300, 0)
+    dm.setup("test")
+    generator = get_generator(model.hparams.seed, model.device)
+    diffusion = model._get_diffusion()
+    learning_rate = 1e-3
+    timesteps = 50
+
+    # MNIST Classifier
+    classifier_ckpt_path = os.path.join(
+        args.cls_logdir,
+        f"lightning_logs/version_{args.cls_version}/checkpoints/last.ckpt",
+    )
+    classifier = MNISTClassifierLightningModule.load_from_checkpoint(classifier_ckpt_path)
+
+    # Get one large batch from MNIST
+    for batch in dm.test_dataloader():
+        data = batch["image"].to("cuda")
+        labels = batch["label"].to("cuda")
+        background = torch.ones_like(labels) * (model.hparams.classes + 1)
+        null_tokens = torch.ones_like(labels) * model.hparams.classes
+        conditions = model.class_embeddings(torch.cat([labels, background], dim=1))
+        null_tokens = model.class_embeddings(torch.cat([null_tokens, background], dim=1))
+        break
+    edit_conditions_labels = torch.randint(
+        0, 10,
+        (labels.shape[0], 1),
+        generator=generator,
+        device="cuda",
+        dtype=torch.long,
+    )
+    edit_conditions = torch.cat([edit_conditions_labels, background], dim=1)
+    edit_conditions = model.class_embeddings(edit_conditions)
+
+    # Set up UNet for cross-attention control editing
+    model.unet = set_attention_processor(model.unet)
+
+    # List of all conditions which can be iterated over during
+    # generative classification.
+    all_conditions = []
+    for i in range(10):
+        classes = torch.tensor([i, model.hparams.classes + 1], dtype=torch.long).to("cuda")
+        class_embeddings = model.class_embeddings(classes)
+        all_conditions.append(class_embeddings.unsqueeze(0))
+    all_conditions = torch.cat(all_conditions)
+
+    metrics = []
+    accuracy_metric = Accuracy(task="multiclass", num_classes=10, top_k=3).to("cuda")
+    # Calculate edit/recon metrics for various NTO hyperparameters
+    # for guidance_scale, nti_steps, swap_fraction in product(list(range(1, 10, 2)), list(range(10, 110, 10)), list(range(1, 6))):
+    for nti_steps, guidance_scale, swap_fraction in product([10, 25, 50], [2.0, 6.0, 10.], [2, 3, 4]):
+        # Set up NTO
+        guidance_scale = float(guidance_scale)
+        swap_fraction /= 20
+        nto = NullTokenOptimisation(
+            diffusion,
+            null_tokens,
+            nti_steps,
+            learning_rate,
+            guidance_scale,
+            timesteps,
+        )
+        # Fit NTO
+        nto.fit(data, conditions, generator=generator)
+        # Reconstruction score
+        recon = nto.generate(generator=generator)
+        recon_score = F.l1_loss(data, recon)
+        # Editability score
+        edits = nto.generate(edit_conditions, swap_fraction=swap_fraction, generator=generator) 
+        # preds = classify(diffusion, data, all_conditions, n_trials=100)
+        preds = classifier.predict_step({"image": edits})
+        editability_score = accuracy_metric(preds, edit_conditions_labels.flatten())
+        # Display scores
+        print(guidance_scale, nti_steps, swap_fraction, recon_score.item(), editability_score.item())
+        metrics.append((guidance_scale, nti_steps, swap_fraction, recon_score.item(), editability_score.item()))
+    
+    df = pd.DataFrame(
+        metrics,
+        columns=["guidance_scale", "nti_steps", "swap_fraction", "reconstruction", "editability"],
+    )
+    df.to_csv(os.path.join(output_dir, "recon_edit.csv"))
 

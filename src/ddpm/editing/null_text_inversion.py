@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from ddpm.training.callbacks import DiffusionCallback, TrajectoryCallback
-from ddpm.training.train import Diffusion
+from ddpm.diffusion.diffusion import Diffusion
 
 
 class NullTokenOptimisation:

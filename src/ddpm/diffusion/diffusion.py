@@ -5,8 +5,7 @@ from diffusers import UNet2DConditionModel, UNet2DModel
 from diffusers.schedulers import DDPMScheduler, DDIMScheduler, DDIMInverseScheduler, SchedulerMixin
 from tqdm import tqdm
 
-from ddpm.diffusion.scheduler import CustomDDIMInverseScheduler
-from ddpm.models.unet import Unet
+from ddpm.models.one_dimension.unet import Unet
 from ddpm.training.callbacks import DiffusionCallback
 
 

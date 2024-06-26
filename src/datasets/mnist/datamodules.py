@@ -22,6 +22,7 @@ class MNISTDataModule(L.LightningDataModule):
         batch_size: int = 32,
         num_workers: int = 0,
         one_hot: bool = True,
+        normalise: bool = True,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -30,14 +31,16 @@ class MNISTDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.one_hot = one_hot
+        self.normalise = normalise
 
     def setup(self, stage: Literal["predict", "test", "train"]):
         transforms_list = [
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
-            # Known mean and std for MNIST
-            v2.Normalize(mean=(0.1307,), std=(0.3081,)),
         ]
+        if self.normalise:
+            # Known mean and std for MNIST
+            transforms_list.append(v2.Normalize(mean=(0.1307,), std=(0.3081,)))
         self.transform = v2.Compose(transforms_list)
         if self.one_hot:
             self.target_transform = v2.Lambda(lambda x: F.one_hot(torch.tensor(x), num_classes=10))

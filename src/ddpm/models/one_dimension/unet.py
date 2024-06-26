@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 import torch
 from torch import nn
 
-from ddpm.models.components import SinusoidalPosEmb, ResnetBlock, Residual, PreNorm, CrossAttention, Downsample, Upsample
+from ddpm.models.one_dimension.components import SinusoidalPosEmb, ResnetBlock, Residual, PreNorm, CrossAttention, Downsample, Upsample
 
 
 class Unet(nn.Module):

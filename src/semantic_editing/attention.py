@@ -452,7 +452,7 @@ def prepare_unet(unet: UNet2DConditionModel) -> UNet2DConditionModel:
 def set_attention_processor(unet: UNet2DConditionModel) -> UNet2DConditionModel:
     attention_processors = {}
     attention_store = AttentionStoreRefine(include_store=False)
-    for name in model.unet.attn_processors.keys():
+    for name in unet.attn_processors.keys():
         if name.startswith("mid_block"):
             place_in_unet = "mid"
         elif name.startswith("up_blocks"):
@@ -465,5 +465,5 @@ def set_attention_processor(unet: UNet2DConditionModel) -> UNet2DConditionModel:
             attention_store=attention_store,
             place_in_unet=place_in_unet,
         )
-    model.unet.set_attn_processor(attention_processors)
+    unet.set_attn_processor(attention_processors)
     return unet

@@ -67,17 +67,6 @@ class Diffusion:
         )
         self.ddim_scheduler.alphas_cumprod = self.ddim_scheduler.alphas_cumprod.to(device=self.device)
 
-        # Image inversion scheduler
-        self.ddim_inverse_scheduler = DDIMInverseScheduler(
-            num_train_timesteps=self.train_timesteps,
-            beta_start=self.beta_start,
-            beta_end=self.beta_end,
-            beta_schedule=self.beta_schedule,
-            prediction_type="epsilon",
-            rescale_betas_zero_snr=rescale_betas_zero_snr,
-        )
-        self.ddim_inverse_scheduler.alphas_cumprod = self.ddim_inverse_scheduler.alphas_cumprod.to(device=self.device)
-
     def get_prediction_scheduler(
         self,
         deterministic: bool,

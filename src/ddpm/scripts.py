@@ -77,7 +77,7 @@ def mnist_train_unconditional():
         check_val_every_n_epoch=args.val_freq,
         logger=tb_logger,
         callbacks=[checkpoint_callback],
-        num_sanity_val_steps=-1,
+        num_sanity_val_steps=1,
     )
 
     # Tuning batch size is unsupported with distributed strategies in lightning 2.2.4
@@ -138,6 +138,7 @@ def mnist_train_guided():
     parser.add_argument("--uncond-prob", type=float, default=0.2)
     parser.add_argument("--embedding-dim", type=int, default=256)
     parser.add_argument("--num-sanity-val-steps", type=int, default=-1)
+    parser.add_argument("--norm-num-groups", type=int, default=32)
     args = parser.parse_args()
 
     seed_everything(args.seed, workers=True)
@@ -163,6 +164,7 @@ def mnist_train_guided():
         cross_attention_dim=args.cross_attention_dim,
         embedding_dim=args.embedding_dim,
         classes=10,
+        norm_num_groups=args.norm_num_groups,
     )
     tb_logger = TensorBoardLogger(save_dir=args.logdir)
     checkpoint_callback = ModelCheckpoint(save_last=True)
@@ -184,251 +186,3 @@ def mnist_train_guided():
         tuner.scale_batch_size(model, datamodule=dm, mode="power")
 
     trainer.fit(model, datamodule=dm)
-
-
-def mnist_editing_visualisations():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", type=str, required=True)
-    parser.add_argument("--version", type=int, default=0)
-    args = parser.parse_args()
-
-    output_dir = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/editing")
-    os.makedirs(output_dir, exist_ok=True)
-
-    ckpt_path = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/checkpoints/last.ckpt")
-    model = GuidedDiffusionLightningModule.load_from_checkpoint(ckpt_path, device="cuda")
-
-    seed_everything(model.hparams.seed)
-    generator = get_generator(model.hparams.seed, model.device)
-
-    # TODO: Load colour from a file
-    bs = 10
-    dm = get_mnist_variant("grey", model.hparams.seed, bs, 0)
-    dm.setup("test")
-    for batch in dm.test_dataloader():
-        data = batch["image"].to("cuda")
-        labels = batch["label"].to("cuda")
-        background = torch.ones_like(labels) * (model.hparams.classes + 1)
-        null_tokens = torch.ones_like(labels) * model.hparams.classes
-        conditions = model.class_embeddings(torch.cat([labels, background], dim=1))
-        null_tokens = model.class_embeddings(torch.cat([null_tokens, background], dim=1))
-        break
-
-    diffusion = model._get_diffusion()
-    inverted_latents = diffusion.ddim_inversion(
-        data,
-        conditions,    
-        50,
-        disable_progress_bar=True,
-    )
-    cfg_recons = diffusion.sample(
-        xT=inverted_latents,
-        null_token=null_tokens,
-        conditions=conditions,
-        guidance_scale=1.0,
-        deterministic=False,
-        timesteps=50,
-        do_cfg=True,
-        disable_progress_bar=True,
-    )
-
-    # Define CFG edit plots
-    fig, axes = plt.subplots(
-        nrows=bs,
-        ncols=10 + 2,
-        figsize=(10, 10),
-        gridspec_kw={"hspace": 0.1, "wspace": 0.1},
-    )  
-    _data = model._postprocess_images(data).detach().cpu().numpy()
-    cfg_recons = model._postprocess_images(cfg_recons).detach().cpu().numpy()
-    # Plot CFG reconstructions
-    for i in range(bs):
-        axes[i, 0].imshow(np.moveaxis(_data[i], 0, 2), cmap="grey")
-        axes[i, 0].set_axis_off()
-        axes[i, 1].imshow(np.moveaxis(cfg_recons[i], 0, 2), cmap="grey")
-        axes[i, 1].set_axis_off()
-
-    for target in range(10): 
-        # Prepare edit condition
-        edit_conditions = torch.tensor(target).unsqueeze(-1).repeat(data.shape[0], 1)
-        background = torch.ones_like(edit_conditions) * (model.hparams.classes + 1)
-        edit_conditions = torch.cat([edit_conditions, background], dim=1).to("cuda")
-        edit_conditions = model.class_embeddings(edit_conditions)
-        # Perform editing via classifier-free guidance
-        edits = diffusion.sample(
-            xT=inverted_latents,
-            null_token=null_tokens,
-            conditions=edit_conditions,
-            guidance_scale=5.0,
-            deterministic=False,
-            timesteps=50,
-            do_cfg=True,
-            disable_progress_bar=True,
-        )
-        # Unnormalise image for display
-        edits = model._postprocess_images(edits).detach().cpu().numpy()
-        # Display images
-        for row in range(bs):
-            axes[row, target + 2].imshow(np.moveaxis(edits[row], 0, 2), cmap="grey")
-            axes[row, target + 2].set_axis_off()
-
-    fig.savefig(os.path.join(output_dir, "edits_cfg.pdf"), format="pdf", bbox_inches="tight")
-
-    # Set up UNet for cross-attention control editing
-    model.unet = set_attention_processor(model.unet)
-
-    fontsize = 10
-    for nti_steps, guidance_scale, swap_fraction in product([10, 50], [2.0, 6.0, 10.], [0.1, 0.2, 0.3]):
-        print(f"NTI steps: {nti_steps}, Guidance scale: {guidance_scale}, swap_fraction: {swap_fraction}")
-        # Define plots for NTO
-        fig, axes = plt.subplots(
-            nrows=bs,
-            ncols=10 + 2,
-            figsize=(10, 10),
-            gridspec_kw={"hspace": 0.1, "wspace": 0.1},
-        )
-        fig.suptitle(rf"NTI steps: {nti_steps} | $\omega$ = {guidance_scale} | Swap fraction: {swap_fraction}", fontsize=fontsize)
-        axes[0, 0].set_title("Orig.", fontsize=fontsize)
-        axes[0, 1].set_title("Recon.", fontsize=fontsize)
-        for i in range(bs):
-            axes[0, i + 2].set_title(f"Label: {i}", fontsize=fontsize)
-
-        # Perform null-token optimisation
-        nto = NullTokenOptimisation(diffusion, null_tokens, nti_steps, 1e-3, guidance_scale, 50)
-        nto.fit(data, conditions, disable_progress_bar=True, generator=generator)
-
-        # Plot NTO reconstructions
-        nto_recons = nto.generate(generator=generator, disable_progress_bar=True)
-        nto_recons = model._postprocess_images(nto_recons).detach().cpu().numpy()
-        for i in range(bs):
-            axes[i, 0].imshow(np.moveaxis(_data[i], 0, 2), cmap="grey")
-            axes[i, 0].set_axis_off()
-            axes[i, 1].imshow(np.moveaxis(nto_recons[i], 0, 2), cmap="grey")
-            axes[i, 1].set_axis_off()
-
-        for target in range(10):
-            # Prepare edit condition
-            edit_conditions = torch.tensor(target).unsqueeze(-1).repeat(data.shape[0], 1)
-            background = torch.ones_like(edit_conditions) * (model.hparams.classes + 1)
-            edit_conditions = torch.cat([edit_conditions, background], dim=1).to("cuda")
-            edit_conditions = model.class_embeddings(edit_conditions)
-            # Perform editing via cross-attention control
-            edits = nto.generate(
-                condition=edit_conditions,
-                generator=generator,
-                disable_progress_bar=True,
-                swap_fraction=swap_fraction,
-            )
-            # Unnormalise image for display
-            edits = model._postprocess_images(edits).detach().cpu().numpy()
-            # Display images
-            for row in range(bs):
-                axes[row, target + 2].imshow(np.moveaxis(edits[row], 0, 2), cmap="grey")
-                axes[row, target + 2].set_axis_off()
-
-        fig.savefig(
-            os.path.join(output_dir, f"edits_nto_{nti_steps}_{guidance_scale}_{swap_fraction}.pdf"),
-            format="pdf",
-            bbox_inches="tight",
-        )
-        plt.close()
-
-
-def mnist_reconstruction_editability_curve():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", type=str, required=True)
-    parser.add_argument("--version", type=int, default=0)
-    parser.add_argument("--cls-logdir", type=str, required=True)
-    parser.add_argument("--cls-version", type=int, default=0)
-    args = parser.parse_args()
-
-    output_dir = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/editing")
-    os.makedirs(output_dir, exist_ok=True)
-
-    ckpt_path = os.path.join(args.logdir, f"lightning_logs/version_{args.version}/checkpoints/last.ckpt")
-    model = GuidedDiffusionLightningModule.load_from_checkpoint(ckpt_path)
-
-    seed_everything(model.hparams.seed)
-
-    # TODO: Load colour from a file
-    dm = get_mnist_variant("grey", model.hparams.seed, 300, 0)
-    dm.setup("test")
-    generator = get_generator(model.hparams.seed, model.device)
-    diffusion = model._get_diffusion()
-    learning_rate = 1e-3
-    timesteps = 50
-
-    # MNIST Classifier
-    classifier_ckpt_path = os.path.join(
-        args.cls_logdir,
-        f"lightning_logs/version_{args.cls_version}/checkpoints/last.ckpt",
-    )
-    classifier = MNISTClassifierLightningModule.load_from_checkpoint(classifier_ckpt_path)
-
-    # Get one large batch from MNIST
-    for batch in dm.test_dataloader():
-        data = batch["image"].to("cuda")
-        labels = batch["label"].to("cuda")
-        background = torch.ones_like(labels) * (model.hparams.classes + 1)
-        null_tokens = torch.ones_like(labels) * model.hparams.classes
-        conditions = model.class_embeddings(torch.cat([labels, background], dim=1))
-        null_tokens = model.class_embeddings(torch.cat([null_tokens, background], dim=1))
-        break
-    edit_conditions_labels = torch.randint(
-        0, 10,
-        (labels.shape[0], 1),
-        generator=generator,
-        device="cuda",
-        dtype=torch.long,
-    )
-    edit_conditions = torch.cat([edit_conditions_labels, background], dim=1)
-    edit_conditions = model.class_embeddings(edit_conditions)
-
-    # Set up UNet for cross-attention control editing
-    model.unet = set_attention_processor(model.unet)
-
-    # List of all conditions which can be iterated over during
-    # generative classification.
-    all_conditions = []
-    for i in range(10):
-        classes = torch.tensor([i, model.hparams.classes + 1], dtype=torch.long).to("cuda")
-        class_embeddings = model.class_embeddings(classes)
-        all_conditions.append(class_embeddings.unsqueeze(0))
-    all_conditions = torch.cat(all_conditions)
-
-    metrics = []
-    accuracy_metric = Accuracy(task="multiclass", num_classes=10, top_k=3).to("cuda")
-    # Calculate edit/recon metrics for various NTO hyperparameters
-    # for guidance_scale, nti_steps, swap_fraction in product(list(range(1, 10, 2)), list(range(10, 110, 10)), list(range(1, 6))):
-    for nti_steps, guidance_scale, swap_fraction in product([10, 25, 50], [2.0, 6.0, 10.], [2, 3, 4]):
-        # Set up NTO
-        guidance_scale = float(guidance_scale)
-        swap_fraction /= 20
-        nto = NullTokenOptimisation(
-            diffusion,
-            null_tokens,
-            nti_steps,
-            learning_rate,
-            guidance_scale,
-            timesteps,
-        )
-        # Fit NTO
-        nto.fit(data, conditions, generator=generator)
-        # Reconstruction score
-        recon = nto.generate(generator=generator)
-        recon_score = F.l1_loss(data, recon)
-        # Editability score
-        edits = nto.generate(edit_conditions, swap_fraction=swap_fraction, generator=generator) 
-        # preds = classify(diffusion, data, all_conditions, n_trials=100)
-        preds = classifier.predict_step({"image": edits})
-        editability_score = accuracy_metric(preds, edit_conditions_labels.flatten())
-        # Display scores
-        print(guidance_scale, nti_steps, swap_fraction, recon_score.item(), editability_score.item())
-        metrics.append((guidance_scale, nti_steps, swap_fraction, recon_score.item(), editability_score.item()))
-    
-    df = pd.DataFrame(
-        metrics,
-        columns=["guidance_scale", "nti_steps", "swap_fraction", "reconstruction", "editability"],
-    )
-    df.to_csv(os.path.join(output_dir, "recon_edit.csv"))
-

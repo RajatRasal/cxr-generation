@@ -111,10 +111,12 @@ def get_mnist_variant(
         "batch_size": batch_size,
         "num_workers": num_workers,
         "one_hot": False,
+        "normalise": False,  # True,
     }
     if variant == "grey":
         dm = MNISTDataModule(
             data_dir="src/datasets/mnist/files/raw",
+            # data_dir="/vol/biomedic3/rrr2417/cxr-generation/src/datasets/mnist/files/morphomnist_thick_thin",
             **kwargs,
         )
     elif variant == "colour":

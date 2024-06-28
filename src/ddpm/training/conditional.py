@@ -44,6 +44,7 @@ class GuidedDiffusionLightningModule(L.LightningModule):
         classes: int = 10,
         cross_attention_dim: int = 128,
         embedding_dim: int = 256,
+        norm_num_groups: int = 32,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -85,6 +86,7 @@ class GuidedDiffusionLightningModule(L.LightningModule):
                 encoder_hid_dim_type="text_proj",
                 cross_attention_dim=self.hparams.cross_attention_dim,
                 encoder_hid_dim=self.hparams.embedding_dim,
+                norm_num_groups=self.hparams.norm_num_groups,
             )
             self.class_embeddings = nn.Embedding(
                 # +1 for null_token, +1 for background
@@ -158,20 +160,13 @@ class GuidedDiffusionLightningModule(L.LightningModule):
         return loss
 
     def _preprocess_images(self, images: torch.FloatTensor) -> torch.FloatTensor:
-        # TODO: Make a model that works with this method of normalisation
-        # # Assuming all image pixels have values between 0 and 255
-        # # [0, 1]
-        # images = images / 255
-        # # [-0.5, 0.5]
-        # images = images - 0.5
-        # # [-1, 1]
-        # images = (images * 2).clamp(-1, 1)
+        # Assuming all image pixels have values between 0 and 1
+        images = (images - 0.5) * 2
         return images
 
     def _postprocess_images(self, images: torch.FloatTensor) -> torch.FloatTensor:
-        # [0, 1]
-        # return (images / 2 + 0.5).clamp(0, 1)
-        return images * 0.3801 + 0.1307
+        # Opposite of _preprocessing_images
+        return (images / 2 + 0.5).clamp(0, 1)
 
     def on_train_start(self):
         self.logger.log_hyperparams(self.hparams)
@@ -275,7 +270,7 @@ class GuidedDiffusionLightningModule(L.LightningModule):
         #     self.is_score.update(samples)
             
         if batch_idx == 0:
-            pred_timesteps = 1000
+            pred_timesteps = max(1, self.hparams.train_timesteps // 10)
             nrows = self.hparams.classes
             ncols = 10
             ndisplay = ncols * nrows

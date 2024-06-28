@@ -9,7 +9,7 @@ from lightning.pytorch.tuner.tuning import Tuner
 from torch import nn
 from torchmetrics import functional as F_metrics
 
-from datasets.mnist.datamodules import MNISTDataModule
+from datasets.mnist.datamodules import get_mnist_variant
 
 
 SEED = 0
@@ -63,13 +63,11 @@ class MNISTClassifierLightningModule(L.LightningModule):
         return torch.optim.Adam(self.model.parameters(), lr=self.hparams.learning_rate)
     
     def setup(self, stage):
-        self.dm = MNISTDataModule(
-            data_dir=self.hparams.data_dir,
-            seed=self.hparams.seed,
-            split_ratio=(0.9, 0.1),
-            batch_size=self.hparams.batch_size,
-            one_hot=True,
-            normalise=True,
+        self.dm = get_mnist_variant(
+            "grey",
+            self.hparams.seed,
+            self.hparams.batch_size,
+            num_workers=0,
         )
         self.dm.setup(stage)
 

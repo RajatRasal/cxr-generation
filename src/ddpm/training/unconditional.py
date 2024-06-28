@@ -103,19 +103,13 @@ class DiffusionLightningModule(L.LightningModule):
         return loss
 
     def _preprocess_images(self, images: torch.FloatTensor) -> torch.FloatTensor:
-        # # Assuming all image pixels have values between 0 and 255
-        # # [0, 1]
-        # images = images / 255
-        # # [-0.5, 0.5]
-        # images = images - 0.5
-        # # [-1, 1]
-        # images = images * 2  # .clamp(-1, 1)
+        # Assuming all image pixels have values between 0 and 1
+        images = (images - 0.5) * 2
         return images
 
     def _postprocess_images(self, images: torch.FloatTensor) -> torch.FloatTensor:
-        # [0, 1]
-        return images * 0.3801 + 0.1307
-        # return (images / 2 + 0.5).clamp(0, 1)
+        # Opposite of _preprocessing_images
+        return (images / 2 + 0.5).clamp(0, 1)
 
     def on_train_start(self):
         self.logger.log_hyperparams(self.hparams)
@@ -209,7 +203,7 @@ class DiffusionLightningModule(L.LightningModule):
             self.is_score.update(samples)
             
         if batch_idx == 0:
-            pred_timesteps = 1000
+            pred_timesteps = max(1, self.hparams.train_timesteps // 20)
             nrows = ncols = 10
             ndisplay = ncols * nrows
 

@@ -8,7 +8,8 @@ packages = [
     { include = "datasets", from = "src" },
     { include = "semantic_editing", from = "src" },
     { include = "ddpm", from = "src" },
-    { include = "classification", from = "src" }
+    { include = "classification", from = "src" },
+    { include = "morphomnist", from = "src" }
 ]
 
 [tool.poetry.scripts]
@@ -23,11 +24,14 @@ colour_mnist = "datasets.mnist.colour:colour_mnist_with_fixed_saturation"
 
 mnist_classifier = "classification.mnist:main"
 
+measure_mnist_metadata = "datasets.mnist.measure:measure_mnist_metadata"
+
 mnist_train = "ddpm.scripts:mnist_train_unconditional"
 mnist_test = "ddpm.scripts:mnist_test_unconditional"
 mnist_train_guided = "ddpm.scripts:mnist_train_guided"
-mnist_editing = "ddpm.scripts:mnist_editing_visualisations"
-mnist_editing_metrics = "ddpm.scripts:mnist_reconstruction_editability_curve"
+mnist_editing = "ddpm.experiments:mnist_editing_visualisations"
+mnist_editing_metrics = "ddpm.experiments:mnist_reconstruction_editability_curve"
+measure_morphometrics = "ddpm.experiments:measure_morphometrics"
 
 [tool.poetry.dependencies]
 python = "3.9.18"
